@@ -1,7 +1,12 @@
-# Build output and dependencies
+# Dependencies
 node_modules/
-lib/
 .pnpm-store/
+
+# lib/ is deliberately committed. This plugin is installed straight from git,
+# and pnpm blocks a git dependency's build script until the user allowlists it
+# by exact commit hash — a line they would have to rewrite on every update.
+# Shipping the built output removes that step entirely; `pnpm build` before a
+# release keeps it in step with src/.
 
 # Runtime state — these hold live credentials and must never be committed
 relay-state.json
