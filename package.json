@@ -47,7 +47,6 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "relay": "node ./lib/cli.js relay",
     "prepack": "npm run build"
   },
   "dependencies": {
