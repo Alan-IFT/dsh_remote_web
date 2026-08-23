@@ -333,39 +333,40 @@ async function commandRelay(args: Args): Promise<void> {
     sessionTtlMs: Math.round(ttlHours * 60 * 60 * 1000),
   })
 
-  const active = relay.store.listAgents().filter((agent) => !agent.revoked)
+  const agents = relay.store.listAgents()
+  const active = agents.filter((agent) => !agent.revoked)
   say(`dsh-remote-web relay listening on ${host}:${String(relay.port)}`)
   say(`  state file   ${statePath}`)
   say(`  cookies      ${secure ? 'Secure (expects TLS in front)' : 'insecure (--no-tls)'}`)
   say(`  agents       ${String(active.length)} registered`)
 
-  // First start with nothing registered: register one and print the command to
-  // run on the DSH machine. Otherwise every operator's first act would be the
-  // same `agent add`, and a relay with no agents can serve nobody anyway.
-  if (active.length === 0 && !args.booleans.has('no-auto-register')) {
-    const label = args.flags.get('agent') ?? 'my-computer'
-    const issued = relay.store.createAgent(label)
-    const browser = relay.store.createClient(`${label} browser`, issued.record.agentId, null)
-    const publicUrl =
-      relayUrlFor(args) ?? `http${secure ? 's' : ''}://${host === '0.0.0.0' ? 'YOUR-RELAY-HOST' : host}:${String(relay.port)}`
+  // A first start does the `agent add` the operator would have typed anyway.
+  // Both conditions are about when that is safe, not how it works.
+  //
+  // Never registered, not merely nothing active: revoking the last agent is a
+  // lockdown, and a restart must not mint a replacement for what was withdrawn.
+  //
+  // A terminal, not any stdout: every documented deployment runs the relay as a
+  // daemon, so stdout is the journal or the Docker log, and the pairing code
+  // carries the encryption token the relay must never store.
+  if (agents.length === 0 && process.stdout.isTTY === true) {
     say()
-    say(`Registered "${label}". Run this on the machine that runs DSH:`)
+    registerAgent(
+      relay.store,
+      args,
+      `http${secure ? 's' : ''}://${host === '0.0.0.0' ? 'YOUR-RELAY-HOST' : host}:${String(relay.port)}`,
+    )
+  } else if (active.length === 0) {
+    // Nothing usable, and the code cannot be printed safely here. Say what to
+    // run rather than leaving an operator to wonder why a relay that reported
+    // a clean start admits nobody.
     say()
-    say(`  dsh-remote-web setup ${encodePairingCode({
-      relayUrl: publicUrl,
-      subject: issued.record.agentId,
-      authSecret: issued.privateKey,
-      encryptionToken: issued.encryptionToken,
-      browserToken: browser.token,
-    })}`)
+    say('No active agents: this relay can serve nobody yet. Run')
     say()
-    if (relayUrlFor(args) === undefined) {
-      say('Set --url to your public relay address first; the code above embeds')
-      say(`${publicUrl}, which is only right if that is reachable from your devices.`)
-      say()
-    }
-    say('The code is shown once. It carries this machine\'s signing key and')
-    say('encryption token, neither of which the relay keeps.')
+    say(`  dsh-remote-web agent add <name> --state ${statePath} --url <public-url>`)
+    say()
+    say('in a terminal, which prints the pairing code once without writing it')
+    say('to this process\'s log.')
   }
   if (!secure) {
     say()
@@ -386,43 +387,74 @@ function relayUrlFor(args: Args): string | undefined {
   return args.flags.get('url') ?? process.env.DSH_REMOTE_WEB_URL
 }
 
+/**
+ * Register a machine and print the one command that pairs it.
+ *
+ * `agent add` and the relay's first start are the same operation reached two
+ * ways, so they are one function. When they were two, adding the browser token
+ * to the pairing code meant making the same edit twice — a divergence this
+ * removes rather than asks the next author to remember.
+ *
+ * Printing is part of the operation, not a step after it: the signing key and
+ * encryption token exist only inside this call, and nothing is stored that
+ * could print them later. Whether this output is a safe place for them is the
+ * caller's question, because only the caller knows whether a human asked.
+ *
+ * The address is resolved here rather than passed in, so "which URL" and "was
+ * it configured" cannot disagree — the caller supplies only its guess, and
+ * whether that guess was used is this function's own answer. Saying so matters:
+ * a wrong address pairs a machine that then dials somewhere it cannot reach.
+ *
+ * The label is resolved here for the same reason. `agent add <label>` and a
+ * first start name the same thing, so they must not disagree about what an
+ * unnamed machine is called — the relay path once answered `my-computer` while
+ * the documented path answered the hostname, which quietly broke the very
+ * `client add --agent <name>` the docs tell you to run next.
+ *
+ * @param fallbackUrl - Address to embed when the operator configured none.
+ */
+function registerAgent(store: RelayStore, args: Args, fallbackUrl: string): void {
+  const configured = relayUrlFor(args)
+  const url = configured ?? fallbackUrl
+  // `agent add <label>`; `relay` has no third positional, so it gets the
+  // hostname — the same answer `agent add` gives an unnamed machine.
+  const label = args.positional[2] ?? hostname()
+  const issued = store.createAgent(label)
+  // The relay can always mint the auth half of a browser credential, and
+  // carrying it here lets `setup` finish pairing without a return trip. It
+  // still never sees the encryption half, so the guarantee is intact.
+  const browser = store.createClient(`${label} browser`, issued.record.agentId, null)
+  say(`Registered "${label}"`)
+  say(`  agent id     ${issued.record.agentId}`)
+  say(`  public key   ${fingerprint(hashToken(issued.record.publicKey))} (relay keeps this)`)
+  say()
+  say('Run this on the machine that runs DSH:')
+  say()
+  say(`  dsh-remote-web setup ${encodePairingCode({
+    relayUrl: url,
+    subject: issued.record.agentId,
+    authSecret: issued.privateKey,
+    encryptionToken: issued.encryptionToken,
+    browserToken: browser.token,
+  })}`)
+  say()
+  if (configured === undefined) {
+    say(`NOTE: set --url or DSH_REMOTE_WEB_URL to your public address; the code`)
+    say(`      above embeds ${url}, which must be reachable from your devices.`)
+    say()
+  }
+  say('Shown once. It carries this machine\'s signing key and encryption token,')
+  say('neither of which the relay keeps — it can admit this machine, and neither')
+  say('impersonate it nor read its traffic.')
+}
+
 /** `agent …`: manage which machines may attach. */
 function commandAgent(args: Args): void {
   const store = new RelayStore(args.flags.get('state') ?? defaultStatePath())
   const action = args.positional[1]
 
   if (action === 'add') {
-    const label = args.positional[2] ?? hostname()
-    const issued = store.createAgent(label)
-    const url = relayUrlFor(args) ?? 'https://relay.example.com'
-    // Issue the first browser credential here too. The relay can always mint
-    // the auth half, and carrying it in the pairing code lets `setup` produce
-    // a working browser code immediately — removing a round trip that never
-    // protected anything, since the relay still never sees the other half.
-    const browser = store.createClient(`${label} browser`, issued.record.agentId, null)
-    const code = encodePairingCode({
-      relayUrl: url,
-      subject: issued.record.agentId,
-      authSecret: issued.privateKey,
-      encryptionToken: issued.encryptionToken,
-      browserToken: browser.token,
-    })
-    say(`Registered agent "${label}"`)
-    say(`  agent id     ${issued.record.agentId}`)
-    say(`  public key   ${fingerprint(hashToken(issued.record.publicKey))} (relay keeps this)`)
-    say()
-    say('Run this on the DSH machine:')
-    say()
-    say(`  dsh-remote-web setup ${code}`)
-    say()
-    if (relayUrlFor(args) === undefined) {
-      say('NOTE: set --url or DSH_REMOTE_WEB_URL to embed your real relay address;')
-      say(`      the code above assumes ${url}.`)
-      say()
-    }
-    say('This code carries the machine signing key and the encryption token.')
-    say('The relay keeps neither — it cannot impersonate this machine or read its traffic.')
-    say('Shown once; it cannot be recovered.')
+    registerAgent(store, args, 'https://relay.example.com')
     return
   }
 

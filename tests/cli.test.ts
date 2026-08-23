@@ -4,8 +4,8 @@
  */
 
 import { execFile } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -161,5 +161,58 @@ describe('one-command onboarding', () => {
     const result = await cli(['setup', code, '--allow-insecure'])
     expect(result.code).toBe(0)
     expect(result.stdout).not.toContain('paste this pairing code')
+  })
+})
+
+describe('relay auto-registration', () => {
+  /** Start the relay, let it settle, stop it; returns its non-TTY stdout. */
+  async function relayOnce(state: string, port: number): Promise<string> {
+    const child = execFile(process.execPath, [
+      CLI, 'relay', '--host', '127.0.0.1', '--port', String(port),
+      '--state', state, '--url', 'https://relay.example.com',
+    ], { env: { ...process.env, DSH_HOME: dir } })
+    let out = ''
+    child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString() })
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    child.kill('SIGTERM')
+    await new Promise((resolve) => child.on('exit', resolve))
+    return out
+  }
+
+  it('never prints a pairing code into a captured log', async () => {
+    // Every documented deployment runs the relay as a daemon, so stdout is the
+    // systemd journal or the Docker log. A pairing code carries the encryption
+    // token, and writing it there would persist on the relay the one secret
+    // this design promises the relay never holds.
+    const state = join(dir, 'a.json')
+    const out = await relayOnce(state, 18821)
+    expect(out).toContain('listening on')
+    expect(out).not.toContain('dshrw1.')
+    expect(out).toMatch(/No active agents/)
+  })
+
+  it('does not resurrect access after the last agent is revoked', async () => {
+    // Revoking the last agent is a lockdown. A restart must not silently mint a
+    // fresh active credential to replace the one just withdrawn.
+    const state = join(dir, 'b.json')
+    await cli(['agent', 'add', 'laptop', '--state', state, '--url', 'https://relay.example.com'])
+    const before = JSON.parse(readFileSync(state, 'utf8')) as { agents: { agentId: string }[] }
+    await cli(['agent', 'revoke', before.agents[0]?.agentId ?? '', '--state', state])
+
+    await relayOnce(state, 18822)
+
+    const after = JSON.parse(readFileSync(state, 'utf8')) as { agents: { revoked: boolean }[] }
+    expect(after.agents).toHaveLength(1)
+    expect(after.agents.every((agent) => agent.revoked)).toBe(true)
+  })
+
+  it('names an unnamed machine the same way `agent add` does', async () => {
+    // Both entry points register the same thing, so an unnamed machine must get
+    // one name. When the relay path invented its own, `client add --agent
+    // <name>` — the next command the docs give you — failed against it.
+    const viaAdd = join(dir, 'c.json')
+    await cli(['agent', 'add', '--state', viaAdd, '--url', 'https://relay.example.com'])
+    const added = JSON.parse(readFileSync(viaAdd, 'utf8')) as { agents: { label: string }[] }
+    expect(added.agents[0]?.label).toBe(hostname())
   })
 })

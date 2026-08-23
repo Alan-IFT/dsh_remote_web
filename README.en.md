@@ -38,9 +38,14 @@ npm i -g github:Alan-IFT/dsh_remote_web
 dsh-remote-web relay --host 127.0.0.1 --port 8787 --trust-proxy --url https://relay.example.com
 ```
 
-The first start **registers a machine automatically** and prints the exact
-command to run next — there is no separate registration step. Put TLS in front
-([examples below](#hosting-the-relay)).
+Run in a terminal, the first start **registers a machine automatically** and
+prints the exact command to run next — there is no separate registration step.
+Put TLS in front ([examples below](#hosting-the-relay)).
+
+> Started as a service instead (systemd, Docker), it prints no pairing code:
+> that output is the journal, and a pairing code carries the encryption token
+> the relay must never store. It points you at `agent add`, which shows the
+> code once in your terminal without logging it.
 
 > `--url` is your public address; it is baked into the pairing code and decides
 > where your computer dials.

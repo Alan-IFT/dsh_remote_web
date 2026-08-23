@@ -38,7 +38,9 @@ npm i -g github:Alan-IFT/dsh_remote_web
 dsh-remote-web relay --host 127.0.0.1 --port 8787 --trust-proxy --url https://relay.example.com
 ```
 
-首次启动会**自动注册一台主机**,并打印下一步要执行的完整命令——不需要额外的注册步骤。前面套一层 HTTPS（[部署示例](#部署中转服务器)在下面）。
+在终端里跑,首次启动会**自动注册一台主机**,并打印下一步要执行的完整命令——不需要额外的注册步骤。前面套一层 HTTPS（[部署示例](#部署中转服务器)在下面）。
+
+> 若是以服务方式启动（systemd、Docker）,则不会打印配对码:那里的输出会进日志,而配对码里带着中转服务器绝不该留存的加密令牌。这时它会提示你去跑 `agent add`——在终端里一次性显示,不写进日志。
 
 > `--url` 填你的公网地址——它会被编进配对码,决定你的电脑连到哪里。
 
@@ -58,9 +60,11 @@ dsh-remote-web setup dshrw1.....        # ← 从服务器复制
 ### 之后要加设备
 
 ```bash
-dsh-remote-web client add 平板 --agent 我的电脑   # 在服务器上
+dsh-remote-web client add 平板 --agent <机器名>   # 在服务器上
 dsh-remote-web invite <上一步打印的 token>        # 在电脑上
 ```
+
+> `<机器名>` 就是注册时那台机器的名字（默认取主机名）。忘了可以 `agent list` 查。
 
 两步分开是有意的:中转能发认证令牌,但**拿不到加密令牌**——所以它无法独自签发可用凭据。
 
@@ -177,8 +181,8 @@ dsh-remote-web invite <token> # 把中转发的令牌合成浏览器配对码
 ```bash
 dsh-remote-web agent list                 # 有哪些电脑
 dsh-remote-web agent revoke <机器名>       # 踢掉一台电脑（立即断开）
-dsh-remote-web client add 平板 --agent 我的电脑 --ttl 24    # 24 小时后过期
-dsh-remote-web client add 手机 --agent 我的电脑             # 绑定到指定电脑
+dsh-remote-web client add 平板 --agent <机器名> --ttl 24    # 24 小时后过期
+dsh-remote-web client add 手机 --agent <机器名>             # 绑定到指定电脑
 dsh-remote-web client list                # 有哪些令牌（只显示指纹）
 dsh-remote-web client revoke <id|指纹>     # 吊销令牌，立即生效
 ```
