@@ -1,0 +1,72 @@
+# dsh-remote-web bundle patch
+#
+# This file is the `dsh.bundle.patch` layer of the published package. When the
+# plugin is installed through the official CLI —
+#
+#   dsh plugin --profile web add dsh-remote-web
+#
+# — the command reconciles `dsh.profile.bundles` against installed packages,
+# sees this declaration, and appends `dsh-remote-web` to the bundle stack. Boot
+# then merges this patch, which inserts the plugin row below. No manual edit of
+# any profile file is required.
+#
+# The row is deliberately mounted in a SAFE STATE: `enabled: true` here only
+# means "the plugin may run", not "this machine is reachable from the
+# internet". The tunnel stays down until a credential file exists at
+# $DSH_HOME/remote-web/agent.json, which only `dsh-remote-web setup` creates.
+# Installing the plugin therefore changes nothing about the machine's exposure
+# until the operator explicitly pairs it with a relay they control.
+#
+# The plugin registers no HTTP route: it reads that credential file and
+# publishes status beside it, so `setup`, `enable`, and `disable` take effect
+# in a running DSH without any control endpoint existing to be attacked.
+#
+# Configuration keys (all optional):
+#
+#   enabled         false disables the plugin outright, ignoring any credentials.
+#   credentialPath  Path to agent.json; empty uses $DSH_HOME/remote-web/agent.json.
+#   localHost       Local DSH host to proxy; empty infers from DSH_WEB_URL.
+#   localPort       Local DSH port to proxy; 0 infers from DSH_WEB_URL.
+#   initialRetryMs  First reconnect delay after a drop (default 1000).
+#   maxRetryMs      Reconnect delay ceiling (default 60000).
+#
+# To pin the local DSH address explicitly, for example when DSH runs on a
+# non-default port and DSH_WEB_URL is not published:
+#
+#   - insert:
+#       - id: remote-web
+#         name: 'dsh-remote-web'
+#         config:
+#           localPort: 8080
+#
+# The tunnel presents proxied requests as the named authority
+# `dsh-remote-web.internal` rather than impersonating loopback, and this row
+# declares that authority to DSH's `/api` fence.
+#
+# That distinction is the whole privilege boundary. DSH's fence admits two kinds
+# of caller: a loopback one, which may reach `PRIVILEGED_METHODS` (credentials,
+# the settings plane, `host.openPath`, `llm.discoverModels`, agent-preset
+# authoring), and a declared authority, which passes the ordinary fence and is
+# refused those methods. A remote browser is the second kind.
+#
+# So DSH enforces the boundary with its own list, and this plugin maintains no
+# copy of it. An earlier version did claim loopback and re-implement the
+# exclusions here; it silently missed `llm.discoverModels`, which is exactly the
+# drift this arrangement removes.
+#
+# The expression appends to whatever the composition already trusts, so a
+# deployment that declares its own LAN authorities keeps them.
+- id: connection
+  config:
+    trustedHosts: !!js "['dsh-remote-web.internal', ...(ctx.webRuntime?.trustedHosts ?? [])]"
+
+- insert:
+    - id: remote-web
+      name: 'dsh-remote-web'
+      config:
+        enabled: true
+        credentialPath: ''
+        localHost: ''
+        localPort: 0
+        initialRetryMs: 1000
+        maxRetryMs: 60000

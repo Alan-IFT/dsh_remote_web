@@ -1,0 +1,56 @@
+# Self-hosted relay, TLS terminated by Caddy.
+#
+# Caddy owns certificates (automatic Let's Encrypt) and is the only container
+# with published ports; the relay listens on the internal network only, so it
+# can never be reached except through TLS.
+#
+# Usage:
+#   1. Point a DNS A/AAAA record at this host.
+#   2. Set RELAY_DOMAIN below (or in a .env file beside this file).
+#   3. docker compose up -d
+#   4. docker compose exec relay dsh-remote-web agent add <name> --state /data/state.json
+#
+services:
+  relay:
+    image: node:22-alpine
+    restart: unless-stopped
+    working_dir: /app
+    # Pin a version in production rather than tracking latest.
+    command: >
+      sh -c "npm i -g github:Alan-IFT/dsh_remote_web &&
+             dsh-remote-web relay --host 0.0.0.0 --port 8787
+               --state /data/state.json --trust-proxy"
+    volumes:
+      - relay-state:/data
+    networks: [internal]
+    # No `ports:` on purpose. Only Caddy is reachable from outside, so the
+    # relay cannot be hit over plain HTTP even by mistake.
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8787/__health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      RELAY_DOMAIN: ${RELAY_DOMAIN:?set RELAY_DOMAIN to your public hostname}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [internal]
+    depends_on: [relay]
+
+volumes:
+  relay-state:
+  caddy-data:
+  caddy-config:
+
+networks:
+  internal:

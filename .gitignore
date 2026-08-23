@@ -1,0 +1,14 @@
+# Build output and dependencies
+node_modules/
+lib/
+.pnpm-store/
+
+# Runtime state — these hold live credentials and must never be committed
+relay-state.json
+agent.json
+status.json
+*.tmp
+
+# Local noise
+*.log
+.DS_Store

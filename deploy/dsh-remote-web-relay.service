@@ -1,0 +1,58 @@
+# systemd unit for the relay on a plain VPS (no Docker).
+#
+# Install:
+#   sudo useradd --system --home /var/lib/dsh-remote-web --create-home dshrelay
+#   sudo npm i -g github:Alan-IFT/dsh_remote_web
+#   sudo cp dsh-remote-web-relay.service /etc/systemd/system/
+#   sudo systemctl enable --now dsh-remote-web-relay
+#
+# Put a TLS terminator (Caddy, nginx, or a cloud load balancer) in front. The
+# unit binds loopback only, so the relay is unreachable until something
+# terminates TLS and proxies to it — a safe default that cannot be forgotten.
+
+[Unit]
+Description=dsh-remote-web relay
+Documentation=https://github.com/Alan-IFT/dsh_remote_web
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dshrelay
+Group=dshrelay
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/dsh-remote-web relay \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --state /var/lib/dsh-remote-web/state.json \
+  --trust-proxy
+Restart=always
+RestartSec=5
+
+# The relay reads one state file and speaks to the network. Everything else is
+# denied, so a compromise of the process cannot reach the rest of the machine.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/dsh-remote-web
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
