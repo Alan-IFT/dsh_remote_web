@@ -12,9 +12,12 @@ First working version.
   connect* (the relay stores only the public half); a separate encryption token
   binds a browser credential to one machine, so the relay cannot mint a working
   credential by itself (it never receives that token).
-- **Signature login.** A browser presents its token once, enrolls a key, and
-  authenticates by signature afterwards — so the token stops crossing the wire
-  and a relay reached over plain HTTP leaks no reusable credential.
+- **Signature login, relay side.** The relay can bind a browser's public key on
+  first login and authenticate it by signature thereafter, so the token would
+  stop crossing the wire. The server half is implemented and tested; **no
+  browser client uses it yet**, so in practice a browser still sends its token
+  on every login. Until that lands, the TLS in front of the relay is what
+  protects the token.
 - **Privilege boundary enforced by DSH.** The tunnel presents a named authority
   instead of impersonating loopback, so DSH refuses `credentials.*`,
   `settings.*`, `host.openPath` and the rest using its own list.

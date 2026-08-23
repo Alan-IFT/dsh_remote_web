@@ -23,7 +23,6 @@ It does not modify DSH, and it opens no inbound port on your machine.
 - **Your own relay** — no third-party service; traffic passes only through a machine you control.
 - **Two tokens** — an **auth token** decides *who may connect* (the relay stores only a public key) and an **encryption token** binds a browser credential to one machine, so the relay cannot mint a working credential by itself.
 - **The relay you host is the one you trust.** It terminates TLS, so it sees your session in the clear. Run it on a machine you control. There is no in-browser encryption that would change this — see [why](docs/DECISIONS.md#browser-side-end-to-end-encryption-was-removed).
-- **The token crosses the wire once.** After the first login a browser authenticates by signature, so even a plain-HTTP relay leaks no reusable credential.
 - **Revocation is immediate**, taking effect on the very next request.
 - **Minimal surface** — only the DSH web interface is proxied. Terminal sockets and other sensitive channels are refused.
 
@@ -147,8 +146,9 @@ and their answer needs a browser extension plus transparency logs. See
   the signing key.
 - The relay **cannot issue a working browser credential alone**: that needs the
   encryption token, which only your machine holds.
-- TLS covers both hops, and the browser token crosses the wire once — after
-  that a browser authenticates by signature.
+- TLS covers both hops. Note that the browser access token is sent on every
+  login, so **the TLS in front of the relay is what protects it** — see
+  [Without TLS?](#without-tls) before running one on a hostile network.
 
 If you need a relay that genuinely cannot read your traffic, the encryption has
 to live in the transport rather than in browser-delivered code; a Noise-based
@@ -243,7 +243,31 @@ See [`deploy/dsh-remote-web-relay.service`](deploy/dsh-remote-web-relay.service)
 
 ### Without TLS?
 
-`--no-tls` is only for a fully trusted private network or VPN. It prints a warning, because tokens and all traffic are then readable on the wire.
+It works, and for some setups it is fine — but be clear about what you give up.
+
+`--no-tls` only changes the cookie: the `__Host-` prefix and the `Secure` flag
+are illegal on plain HTTP, so a plainly-named cookie is used instead.
+Everything else — token checks, session expiry, revocation, rate limiting, the
+cross-site refusal, path restrictions — behaves identically.
+
+What you lose is confidentiality and integrity on the wire. Anyone in the
+network path (Wi-Fi, ISP, hosting provider, another VM) can read the session,
+**and read the browser access token, which is sent on every login**. A token
+read off the wire is a working credential until you revoke it. They can also
+modify responses in flight, and the browser has no way to tell.
+
+Reasonable without TLS:
+
+- a LAN or home network you control;
+- inside a VPN or WireGuard/Tailscale tunnel, which supplies the encryption;
+- bound to `127.0.0.1` and reached through an SSH tunnel.
+
+Not reasonable without TLS: anything reachable from the public internet, or any
+shared network you do not control (office, café, hotel, campus).
+
+If a certificate is the obstacle, the Docker Compose deployment gets one from
+Let's Encrypt automatically and needs only a domain name pointed at the host —
+that is usually less work than reasoning about who can see the wire.
 
 ## Configuration
 
