@@ -304,16 +304,34 @@ describe('proxying an authenticated browser to DSH', () => {
   it('rewrites headers so the DSH trust fence accepts the request', async () => {
     const cookie = await login(clientToken)
     dsh.seen.length = 0
+    // A legitimate request carries the relay's own origin, which can never
+    // match the authority the host presents; without the rewrite DSH would
+    // reject a request the operator authorized.
     const response = await fetch(`${relayBase}/a/${agentId}/`, {
-      headers: { cookie, origin: 'https://relay.example.com', 'sec-fetch-site': 'cross-site' },
+      headers: { cookie, origin: relayBase, 'sec-fetch-site': 'same-origin' },
     })
-    // The browser's cross-site markers must not reach DSH, or the fence would
-    // reject a request the operator legitimately authorized.
     expect(response.status).toBe(200)
     const observed = dsh.seen.at(-1)
     expect(observed?.headers.host).toBe('dsh-remote-web.internal')
     expect(observed?.headers.origin).toBe('http://dsh-remote-web.internal')
     expect(observed?.headers['sec-fetch-site']).toBe('same-origin')
+  })
+
+  it('refuses a cross-site request instead of laundering it', async () => {
+    // The rewrite that lets a proxied request pass DSH's fence also destroys
+    // the evidence that fence depends on: forwarded verbatim, every request
+    // would reach DSH marked same-origin. The judgement therefore has to be
+    // made here, while the browser's own marker still means something.
+    // Without it, an attacker's page could drive the DSH surface using the
+    // victim's session.
+    const cookie = await login(clientToken)
+    dsh.seen.length = 0
+    const response = await fetch(`${relayBase}/a/${agentId}/`, {
+      headers: { cookie, origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' },
+    })
+    expect(response.status).toBe(403)
+    // Refused at the boundary: nothing reached the host at all.
+    expect(dsh.seen).toHaveLength(0)
   })
 
   it('does not leak the relay session cookie to DSH', async () => {

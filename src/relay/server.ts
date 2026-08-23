@@ -349,6 +349,21 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     session: Session,
     path: string,
   ): void => {
+    // CSRF, checked here because here is the last place the browser's own
+    // markers still mean something. Forwarding rewrites Origin and Host to the
+    // named authority so DSH's fence accepts a proxied request at all, which
+    // necessarily makes that fence describe this relay rather than the browser.
+    // The duty therefore moves to the relay rather than disappearing.
+    //
+    // SameSite=Lax already withholds the session cookie from cross-site writes,
+    // so this is the second of two independent barriers; it also covers the
+    // case Lax permits, a cross-site top-level GET, which DSH would have
+    // refused on its own had the markers reached it.
+    if (normalizeHeaders(request.headers)['sec-fetch-site'] === 'cross-site') {
+      sendHtml(response, 403, renderErrorPage(403, '跨站请求被拒绝 / Cross-site request refused'))
+      return
+    }
+
     const rid = randomUUID()
     const state: ActiveRequest = {
       response,
@@ -897,6 +912,13 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     }
 
     /* browser socket into a proxied agent */
+    // Same reasoning as the HTTP path: this is the last point at which the
+    // browser's own markers are still its own. A WebSocket upgrade is not
+    // covered by CORS, so the marker is the check that exists.
+    if (normalizeHeaders(request.headers)['sec-fetch-site'] === 'cross-site') {
+      reject('403 Forbidden')
+      return
+    }
     const session = resolveLiveSession(readSessionCookie(request.headers.cookie))
     if (session === undefined) {
       reject('401 Unauthorized')

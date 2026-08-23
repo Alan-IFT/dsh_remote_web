@@ -34,6 +34,43 @@ a proof-of-concept impersonated a machine from the state file alone.
 
 ---
 
+## The relay rewrites origin markers, and therefore owns the CSRF check
+
+**Decision.** Forwarding sets `Host`, `Origin` and `sec-fetch-site` to the named
+authority, and the relay refuses `sec-fetch-site: cross-site` on both the HTTP
+and WebSocket paths before forwarding.
+
+**Why the rewrite.** DSH's fence
+(`dsh-client-connection`, `isTrustedApiRequest`) admits a request when the
+`Host` is loopback or a declared `trustedHosts` authority, refuses
+`sec-fetch-site: cross-site`, and requires `Origin.host` to equal `Host`. A
+browser reaching a relay sends markers describing the *relay's* origin, which
+can never equal the authority the host presents. Forwarded verbatim, every
+legitimate request would fail. This is not a DSH defect: it is what any reverse
+proxy does, and why `proxy_set_header Host` exists.
+
+**Why the relay must then check.** The rewrite destroys the evidence the fence
+relies on. Forwarded verbatim, everything arrives marked `same-origin`, so
+DSH's answer describes the relay rather than the browser. The duty does not
+disappear with the evidence — it moves to the last point where the browser's
+own marker still means something, which is the relay.
+
+`SameSite=Lax` is the first barrier and withholds the cookie from cross-site
+writes. It permits a cross-site top-level GET, which DSH would have refused had
+the markers survived, so the marker check restores exactly what the rewrite
+removed. Two independent barriers, neither load-bearing alone.
+
+**Rejected.** Claiming loopback and re-implementing DSH's privileged-method
+exclusions here. Tried: it silently missed `llm.discoverModels`, and every DSH
+release would risk another gap. The named authority lets DSH enforce its own
+list.
+
+**Rejected.** Leaving CSRF to `SameSite=Lax` alone. It is one mechanism, in one
+place, defending a surface that runs code — and it does not cover the GET case
+the rewrite made reachable.
+
+---
+
 ## Pairing codes are printed only to a terminal
 
 **Decision.** `relay` auto-registers a first machine and prints its pairing code
@@ -157,3 +194,43 @@ names as deleted and new ones as untracked. That is normal, not a broken build.
 
 **Why.** Both once added it, producing `dsh-remote-web: dsh-remote-web: …`.
 One owner for the prefix means it cannot be doubled or forgotten.
+
+---
+
+## `--require-e2e` is off by default, and cannot currently be turned on
+
+**Decision.** `requireE2e` defaults to false. The relay is trusted with
+plaintext, and `README`/`SECURITY.md` say so plainly.
+
+**Why it cannot yet be enabled — a bootstrap deadlock.** Both crypto sides are
+complete and tested. What is missing is a way to seal the *first* request:
+
+1. The login page is relay-owned HTML. It loads `/__e2e/client.js` and keeps
+   the encryption token in the tab. This works.
+2. The browser then navigates to `/a/<agent>/`. A top-level navigation is a
+   plain browser GET; no `fetch` wrapper is involved, so it carries no
+   `x-dshrw-sealed` header.
+3. With `requireE2e` on, the host refuses that unsealed request with 403
+   (`tunnel.ts`, the `else if (this.#credentials.requireE2e)` branch).
+4. The shim that would arm encryption is injected into HTML responses only
+   when `#contexts.has(frame.rid)` — that is, only for requests that already
+   arrived sealed.
+
+So the page that installs encryption can only arrive through a request that is
+already encrypted. Turning the flag on today makes a fresh install answer 403 to
+everything. A security setting that only breaks the product protects nobody.
+
+**Also incomplete.** The `fetch` wrapper seals request *metadata* only; the body
+rides as-is (`browser-crypto.ts`, "Only the metadata is sealed here"). Response
+bodies are sealed by the host.
+
+**What would fix it, in order of preference.** Give the *first* navigation a
+sealed form rather than adding an exception to the check: have the login page,
+which already holds the token, fetch the shell through the sealed `fetch` path
+and install the document itself. That keeps one rule — nothing unsealed is
+served — instead of carving out a bootstrap hole that an attacker could aim
+for. Exempting `text/html` navigations would be less code and strictly worse:
+it reintroduces exactly the downgrade path `requireE2e` exists to close.
+
+**Do not** flip the default without closing this. The flag is honest today
+precisely because it is documented as off.
