@@ -224,13 +224,35 @@ everything. A security setting that only breaks the product protects nobody.
 rides as-is (`browser-crypto.ts`, "Only the metadata is sealed here"). Response
 bodies are sealed by the host.
 
-**What would fix it, in order of preference.** Give the *first* navigation a
-sealed form rather than adding an exception to the check: have the login page,
-which already holds the token, fetch the shell through the sealed `fetch` path
-and install the document itself. That keeps one rule — nothing unsealed is
-served — instead of carving out a bootstrap hole that an attacker could aim
-for. Exempting `text/html` navigations would be less code and strictly worse:
-it reintroduces exactly the downgrade path `requireE2e` exists to close.
+**Why this is structural, not unfinished wiring.** Nearly all the machinery is
+already here and tested: the login page stores the token in `sessionStorage`,
+`/__e2e/host` publishes the host public key, `resume()` re-arms from that pair,
+the wrappers seal once installed, and the relay forwards the envelope header
+verbatim. What blocks it is not a missing call. **A top-level navigation is
+issued by the browser, so no script can attach a header to it** — and the same
+is true of every `<script src>`, `<link href>`, `<img src>` and font the DSH
+shell pulls in. The `fetch` wrapper cannot see any of them.
+
+**What would actually close it: a Service Worker.** It is the only mechanism
+that can intercept browser-originated subresource requests, so it is the only
+way to seal the whole surface rather than the fraction that goes through
+`fetch`. That means: a worker that seals and opens every request in scope,
+registration and update lifecycle, key handoff by `postMessage`, re-keying when
+the host reconnects, and a defined behaviour where workers are unavailable
+(private mode, plain-HTTP origins). The existing `fetch`/WebSocket wrappers
+would then be redundant. This is a feature with its own threat model, not a
+patch.
+
+**Rejected — exempting HTML navigations.** Far less code, and strictly worse: it
+reopens precisely the downgrade path `requireE2e` exists to close. A hostile
+relay would serve its own shell and the user could not tell.
+
+**Rejected — bootstrapping from a relay-owned page without a worker.** The
+navigation problem is solvable this way (the relay already owns `/` and the
+picker, which carry no DSH data), but it leaves every subresource unsealed. It
+would make the flag *appear* to work while protecting only part of the traffic,
+which is worse than an honest "off".
 
 **Do not** flip the default without closing this. The flag is honest today
-precisely because it is documented as off.
+precisely because it is documented as off, and `SECURITY.md` states that the
+relay sees plaintext without it.
