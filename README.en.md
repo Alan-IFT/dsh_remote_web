@@ -29,64 +29,48 @@ It does not modify DSH, and it opens no inbound port on your machine.
 
 ## Quick start
 
-Three steps: install the plugin, run the relay, pair them.
+Once installed, **each machine takes one pasted command**.
 
-### 1. Install the plugin on the computer running DSH
-
-```bash
-dsh plugin --profile web add github:Alan-IFT/dsh_remote_web
-```
-
-That is the whole installation — **no configuration file to edit**. Remote access stays off until you pair; the plugin connects nowhere before that.
-
-> Installed from GitHub for now (not yet on npm). The repository ships its build output, so there is nothing else to run.
-
-### 2. Run the relay on your own server
-
-Any machine with a public address will do; a cheap VPS is plenty.
+### 1. On your server
 
 ```bash
 npm i -g github:Alan-IFT/dsh_remote_web
-dsh-remote-web relay --host 127.0.0.1 --port 8787 --trust-proxy
+dsh-remote-web relay --host 127.0.0.1 --port 8787 --trust-proxy --url https://relay.example.com
 ```
 
-Put Caddy or nginx in front for TLS ([examples below](#hosting-the-relay)).
+The first start **registers a machine automatically** and prints the exact
+command to run next — there is no separate registration step. Put TLS in front
+([examples below](#hosting-the-relay)).
 
-### 3. Pair
+> `--url` is your public address; it is baked into the pairing code and decides
+> where your computer dials.
 
-On the **relay**, register your computer and get a pairing code:
+### 2. On the computer running DSH
+
+Install the plugin, then paste what the relay printed:
 
 ```bash
-export DSH_REMOTE_WEB_URL=https://relay.example.com
-dsh-remote-web agent add my-laptop
+dsh plugin --profile web add github:Alan-IFT/dsh_remote_web
+dsh-remote-web setup dshrw1.....        # ← copied from the server
 ```
 
-It prints a `dsh-remote-web setup dshrw1....` line. Run that line on **your computer**:
+`setup` prints a **browser pairing code** when it finishes. Open the relay URL,
+paste it, and you are in. A running DSH picks the credentials up within
+seconds — no restart.
+
+> The repository ships its build output, so there is nothing else to run. The
+> code is shown once; it carries this machine's signing key and encryption
+> token, neither of which the relay keeps.
+
+### Adding more devices later
 
 ```bash
-dsh-remote-web setup dshrw1.....
+dsh-remote-web client add tablet --agent my-computer   # on the server
+dsh-remote-web invite <token printed above>            # on the computer
 ```
 
-A running DSH picks this up within seconds — no restart needed.
-
-Finally, issue yourself a browser token on the relay:
-
-Issuing one takes **both machines**, which is the two-token property at work:
-
-```bash
-# On the relay: mint the auth half (the relay knows only this half)
-dsh-remote-web client add my-phone --agent my-laptop
-
-# On the DSH machine: combine it with the encryption token (the relay lacks this)
-dsh-remote-web invite <token printed above>
-```
-
-Open the relay URL, paste the final pairing code, and you are in.
-
-> The relay **cannot issue a working credential alone** — it never holds the
-> encryption token. That is the guarantee, not an inconvenience.
-
-> A token is shown once and cannot be recovered — the server keeps only a hash. Lose it and you issue a new one, then revoke the old.
+The split is deliberate: the relay can mint the auth half but **never holds the
+encryption token**, so it cannot issue a working credential alone.
 
 ## How it works
 

@@ -165,3 +165,34 @@ describe('pairing codes', () => {
     expect(decodePairingCode(`dshrw1.${encoded}..auth.enc`)).toBeNull()
   })
 })
+
+describe('agent codes carrying a browser token', () => {
+  // The relay issues a browser credential alongside the agent so `setup` can
+  // mint a working browser code without a second trip. It is optional, so a
+  // browser code stays five segments.
+  it('round-trips the extra segment', () => {
+    const code = encodePairingCode({
+      relayUrl: 'https://relay.example.com',
+      subject: 'agent-1',
+      authSecret: 'signing-key',
+      encryptionToken: 'enc-token',
+      browserToken: 'browser-token',
+    })
+    expect(decodePairingCode(code)?.browserToken).toBe('browser-token')
+  })
+
+  it('omits the segment when there is no browser token', () => {
+    const code = encodePairingCode({
+      relayUrl: 'https://relay.example.com',
+      subject: null,
+      authSecret: 'access-token',
+      encryptionToken: 'enc-token',
+    })
+    expect(code.split('.')).toHaveLength(5)
+    expect(decodePairingCode(code)?.browserToken).toBeUndefined()
+  })
+
+  it('still rejects a code with too many segments', () => {
+    expect(decodePairingCode('dshrw1.a.b.c.d.e.f')).toBeNull()
+  })
+})

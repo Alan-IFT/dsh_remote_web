@@ -11,7 +11,7 @@ import { promisify } from 'node:util'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { encodePairingCode } from '../src/shared/auth.js'
+import { decodePairingCode, encodePairingCode } from '../src/shared/auth.js'
 import { generateAgentIdentity, generateEncryptionToken } from '../src/shared/crypto.js'
 
 /** Build an agent pairing code for the tests. */
@@ -124,5 +124,42 @@ describe('status without a running plugin', () => {
     const result = await cli(['status'])
     expect(result.code).toBe(0)
     expect(result.stdout).toMatch(/Not configured/)
+  })
+})
+
+describe('one-command onboarding', () => {
+  it('setup prints a browser pairing code when the agent code carries one', async () => {
+    // This is what removes a round trip: the machine holds both halves at this
+    // point, so it can finish the job instead of sending the operator back.
+    const code = encodePairingCode({
+      relayUrl: 'http://127.0.0.1:9',
+      subject: 'agent-1',
+      authSecret: generateAgentIdentity().privateKey,
+      encryptionToken: generateEncryptionToken(),
+      browserToken: 'relay-issued-browser-token',
+    })
+    const result = await cli(['setup', code, '--allow-insecure'])
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('paste this pairing code')
+
+    // The printed code must be a usable browser code: no subject, and the
+    // encryption half attached.
+    const printed = result.stdout.match(/dshrw1\.[A-Za-z0-9._-]+/g)?.pop() ?? ''
+    const parsed = decodePairingCode(printed)
+    expect(parsed?.subject).toBeNull()
+    expect(parsed?.authSecret).toBe('relay-issued-browser-token')
+    expect(parsed?.encryptionToken).toBeTruthy()
+  })
+
+  it('setup stays quiet about browsers when no token was carried', async () => {
+    const code = encodePairingCode({
+      relayUrl: 'http://127.0.0.1:9',
+      subject: 'agent-1',
+      authSecret: generateAgentIdentity().privateKey,
+      encryptionToken: generateEncryptionToken(),
+    })
+    const result = await cli(['setup', code, '--allow-insecure'])
+    expect(result.code).toBe(0)
+    expect(result.stdout).not.toContain('paste this pairing code')
   })
 })

@@ -199,6 +199,17 @@ export interface PairingCode {
   authSecret: string
   /** Payload encryption token, shared by the machine and its browsers. */
   encryptionToken: string
+  /**
+   * A browser access token the relay issued alongside an agent registration.
+   *
+   * Present only in an agent code. It lets `setup` mint a complete browser
+   * pairing code on the spot, because the machine then holds both halves —
+   * this token from the relay, and its own encryption token. Without it the
+   * operator would have to return to the relay for a browser credential and
+   * come back again, which is two more hops for no security gain: the relay
+   * could always issue the auth half, and it still never sees the other one.
+   */
+  browserToken?: string
 }
 
 /** Encode a pairing code. */
@@ -206,7 +217,8 @@ export function encodePairingCode(code: PairingCode): string {
   const url = Buffer.from(code.relayUrl, 'utf8').toString('base64url')
   const subject =
     code.subject === null ? '' : Buffer.from(code.subject, 'utf8').toString('base64url')
-  return `dshrw1.${url}.${subject}.${code.authSecret}.${code.encryptionToken}`
+  const base = `dshrw1.${url}.${subject}.${code.authSecret}.${code.encryptionToken}`
+  return code.browserToken === undefined ? base : `${base}.${code.browserToken}`
 }
 
 /**
@@ -216,8 +228,10 @@ export function encodePairingCode(code: PairingCode): string {
  */
 export function decodePairingCode(input: string): PairingCode | null {
   const parts = input.trim().split('.')
-  if (parts.length !== 5 || parts[0] !== 'dshrw1') return null
-  const [, encodedUrl, encodedSubject, authSecret, encryptionToken] = parts
+  // Five segments is a browser code; six adds the browser token an agent code
+  // carries so `setup` can finish pairing without another trip to the relay.
+  if ((parts.length !== 5 && parts.length !== 6) || parts[0] !== 'dshrw1') return null
+  const [, encodedUrl, encodedSubject, authSecret, encryptionToken, browserToken] = parts
   if (
     encodedUrl === undefined ||
     encodedUrl === '' ||
@@ -243,5 +257,6 @@ export function decodePairingCode(input: string): PairingCode | null {
         : Buffer.from(encodedSubject, 'base64url').toString('utf8'),
     authSecret,
     encryptionToken,
+    ...(browserToken === undefined || browserToken === '' ? {} : { browserToken }),
   }
 }

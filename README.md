@@ -29,61 +29,40 @@
 
 ## 快速开始
 
-一共三步：装插件、跑中转、配对。
+装好后，**每台机器各粘贴一条命令**即可用。
 
-### 1. 在跑 DSH 的电脑上装插件
-
-```bash
-dsh plugin --profile web add github:Alan-IFT/dsh_remote_web
-```
-
-装完就行，**不需要改任何配置文件**。此时远程访问还是关闭的——插件在配对之前不会连接任何地方。
-
-> 目前从 GitHub 安装（尚未发布到 npm）。仓库自带编译产物，装完即用，无需额外步骤。
-
-### 2. 在你自己的服务器上跑中转
-
-需要一台有公网地址的机器（几十块钱一个月的 VPS 就够）。
+### 1. 在你的服务器上
 
 ```bash
 npm i -g github:Alan-IFT/dsh_remote_web
-dsh-remote-web relay --host 127.0.0.1 --port 8787 --trust-proxy
+dsh-remote-web relay --host 127.0.0.1 --port 8787 --trust-proxy --url https://relay.example.com
 ```
 
-前面用 Caddy 或 nginx 套一层 HTTPS（[部署示例](#部署中转服务器)在下面）。
+首次启动会**自动注册一台主机**,并打印下一步要执行的完整命令——不需要额外的注册步骤。前面套一层 HTTPS（[部署示例](#部署中转服务器)在下面）。
 
-### 3. 配对
+> `--url` 填你的公网地址——它会被编进配对码,决定你的电脑连到哪里。
 
-在**中转服务器**上注册你的电脑，拿到配对码：
+### 2. 在跑 DSH 的电脑上
+
+先装插件,再粘贴上一步打印的命令:
 
 ```bash
-export DSH_REMOTE_WEB_URL=https://relay.example.com   # 你的中转地址
-dsh-remote-web agent add 我的电脑
+dsh plugin --profile web add github:Alan-IFT/dsh_remote_web
+dsh-remote-web setup dshrw1.....        # ← 从服务器复制
 ```
 
-它会打印一行 `dsh-remote-web setup dshrw1....`。把这行命令复制到**你的电脑**上执行：
+`setup` 完成后会直接打印**浏览器配对码**。打开中转地址、粘贴,就连上了。运行中的 DSH 几秒内自动生效,不用重启。
+
+> 仓库自带编译产物,装完即用。配对码只显示一次,它携带这台电脑的签名密钥和加密令牌——中转两者都不保存。
+
+### 之后要加设备
 
 ```bash
-dsh-remote-web setup dshrw1.....
+dsh-remote-web client add 平板 --agent 我的电脑   # 在服务器上
+dsh-remote-web invite <上一步打印的 token>        # 在电脑上
 ```
 
-运行中的 DSH 会在几秒内自动生效，不用重启。
-
-最后发一个浏览器凭据。这一步**需要两台机器各做一半**——这正是双令牌在起作用：
-
-```bash
-# 在中转服务器上:发认证令牌(中转只知道这一半)
-dsh-remote-web client add 我的手机 --agent 我的电脑
-
-# 在你的电脑上:把它和加密令牌合成完整配对码(中转拿不到这一半)
-dsh-remote-web invite <上一步打印的 token>
-```
-
-打开中转地址，粘贴最终的配对码，就连上了。
-
-> 中转**无法独自签发可用凭据**,因为它从来没有加密令牌。这不是流程繁琐,而是安全属性在生效。
-
-> 令牌只显示一次，之后无法找回——服务器上只存哈希。弄丢了就重新发一个，把旧的吊销掉。
+两步分开是有意的:中转能发认证令牌,但**拿不到加密令牌**——所以它无法独自签发可用凭据。
 
 ## 工作原理
 

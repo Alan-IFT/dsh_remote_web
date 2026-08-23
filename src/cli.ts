@@ -128,6 +128,7 @@ function commandSetup(args: Args): void {
   let privateKey = args.flags.get('key')
   let encryptionToken = args.flags.get('encryption-token')
   let agentId = args.flags.get('agent-id')
+  let browserToken: string | undefined
 
   if (raw !== undefined) {
     const code = decodePairingCode(raw)
@@ -139,6 +140,7 @@ function commandSetup(args: Args): void {
     agentId = code.subject
     privateKey = code.authSecret
     encryptionToken = code.encryptionToken
+    browserToken = code.browserToken
   }
 
   if (
@@ -188,6 +190,25 @@ function commandSetup(args: Args): void {
   say(`  encryption   ${fingerprint(hashToken(encryptionToken))} (fingerprint)`)
   say(`  credentials  ${path}`)
   say()
+
+  if (browserToken !== undefined) {
+    // Both halves exist on this machine now, so the browser code can be built
+    // here rather than sending the operator back to the relay.
+    say('Open this in a browser to connect:')
+    say()
+    say(`  ${relayUrl}`)
+    say()
+    say('and paste this pairing code:')
+    say()
+    say(`  ${encodePairingCode({
+      relayUrl,
+      subject: null,
+      authSecret: browserToken,
+      encryptionToken,
+    })}`)
+    say()
+    say('Issue more with `client add` on the relay, then `invite` here.')
+  }
   say('A running DSH picks this up within a few seconds; otherwise it connects at next start.')
 }
 
@@ -312,10 +333,40 @@ async function commandRelay(args: Args): Promise<void> {
     sessionTtlMs: Math.round(ttlHours * 60 * 60 * 1000),
   })
 
+  const active = relay.store.listAgents().filter((agent) => !agent.revoked)
   say(`dsh-remote-web relay listening on ${host}:${String(relay.port)}`)
   say(`  state file   ${statePath}`)
   say(`  cookies      ${secure ? 'Secure (expects TLS in front)' : 'insecure (--no-tls)'}`)
-  say(`  agents       ${String(relay.store.listAgents().filter((a) => !a.revoked).length)} registered`)
+  say(`  agents       ${String(active.length)} registered`)
+
+  // First start with nothing registered: register one and print the command to
+  // run on the DSH machine. Otherwise every operator's first act would be the
+  // same `agent add`, and a relay with no agents can serve nobody anyway.
+  if (active.length === 0 && !args.booleans.has('no-auto-register')) {
+    const label = args.flags.get('agent') ?? 'my-computer'
+    const issued = relay.store.createAgent(label)
+    const browser = relay.store.createClient(`${label} browser`, issued.record.agentId, null)
+    const publicUrl =
+      relayUrlFor(args) ?? `http${secure ? 's' : ''}://${host === '0.0.0.0' ? 'YOUR-RELAY-HOST' : host}:${String(relay.port)}`
+    say()
+    say(`Registered "${label}". Run this on the machine that runs DSH:`)
+    say()
+    say(`  dsh-remote-web setup ${encodePairingCode({
+      relayUrl: publicUrl,
+      subject: issued.record.agentId,
+      authSecret: issued.privateKey,
+      encryptionToken: issued.encryptionToken,
+      browserToken: browser.token,
+    })}`)
+    say()
+    if (relayUrlFor(args) === undefined) {
+      say('Set --url to your public relay address first; the code above embeds')
+      say(`${publicUrl}, which is only right if that is reachable from your devices.`)
+      say()
+    }
+    say('The code is shown once. It carries this machine\'s signing key and')
+    say('encryption token, neither of which the relay keeps.')
+  }
   if (!secure) {
     say()
     say('WARNING: running without TLS. Tokens and session traffic are readable on the wire.')
@@ -344,11 +395,17 @@ function commandAgent(args: Args): void {
     const label = args.positional[2] ?? hostname()
     const issued = store.createAgent(label)
     const url = relayUrlFor(args) ?? 'https://relay.example.com'
+    // Issue the first browser credential here too. The relay can always mint
+    // the auth half, and carrying it in the pairing code lets `setup` produce
+    // a working browser code immediately — removing a round trip that never
+    // protected anything, since the relay still never sees the other half.
+    const browser = store.createClient(`${label} browser`, issued.record.agentId, null)
     const code = encodePairingCode({
       relayUrl: url,
       subject: issued.record.agentId,
       authSecret: issued.privateKey,
       encryptionToken: issued.encryptionToken,
+      browserToken: browser.token,
     })
     say(`Registered agent "${label}"`)
     say(`  agent id     ${issued.record.agentId}`)
