@@ -58,3 +58,24 @@ code, and each was fixed by changing the design rather than adding a guard.
   the port the web server actually bound.
 - **The CLI crashed when piped.** `status | head` produced an EPIPE stack
   trace.
+- **The relay logged the encryption token.** Auto-registering on first start
+  printed a pairing code to stdout — which under systemd or Docker is the
+  journal, writing the one secret the relay must never hold to its own disk.
+  The code is now printed only to a terminal.
+- **A restart could undo a lockdown.** Auto-registration triggered on "no
+  active agents", so revoking the last one and restarting minted a fresh
+  working credential. It now triggers only on a store that never held an agent.
+- **Duplicate machine names broke revocation.** Two live agents could share a
+  label, after which `agent revoke <label>` reported "No active agent" while
+  both stayed connected. Duplicate live labels are refused at creation; a
+  revoked name can be reused.
+- **Concurrent writes could erase a revocation.** The relay and CLI write the
+  same state file from different processes, and a write landing mid-update was
+  silently overwritten. `WatchedFile.update()` now holds a lock across read and
+  write; three concurrent writers kept 107 of 360 writes before, 360 of 360
+  after. See [`docs/DECISIONS.md`](docs/DECISIONS.md) for why a stamp-based
+  optimistic retry does not work here.
+- **Onboarding named machines two ways.** `agent add` defaulted to the
+  hostname while the relay's first start invented `my-computer`, so the
+  `client add --agent <name>` that the README tells you to run next failed.
+  Both paths now share one function.

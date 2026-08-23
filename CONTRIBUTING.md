@@ -1,10 +1,14 @@
 # Contributing
 
+New to the project, or returning after a while? Read
+[`docs/ORIENTATION.md`](docs/ORIENTATION.md) first: it maps the three moving
+parts and says which document answers which question.
+
 ## Getting set up
 
 ```bash
 pnpm install
-pnpm test        # 163 tests, including end-to-end against a real tunnel
+pnpm test        # includes end-to-end tests against a real tunnel
 pnpm typecheck
 pnpm build
 ```
@@ -60,6 +64,11 @@ them, because the properties worth testing here — "the relay cannot read this"
   behind a non-obvious choice is not.
 - **Fail closed and loudly.** A security control that silently degrades is
   worse than none, because it is believed.
+- **Record what was rejected.** Commit messages here are long on purpose: what
+  changed, why, which alternative was ruled out, and how it was verified. When
+  the reasoning is one a future change is likely to reopen, put it in
+  [`docs/DECISIONS.md`](docs/DECISIONS.md) so it is found before the work is
+  redone rather than after.
 
 ## Before opening a pull request
 
