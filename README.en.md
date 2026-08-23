@@ -39,7 +39,7 @@ dsh plugin --profile web add github:Alan-IFT/dsh_remote_web
 
 That is the whole installation — **no configuration file to edit**. Remote access stays off until you pair; the plugin connects nowhere before that.
 
-> Installed from GitHub for now (not yet on npm). It compiles on install, so the machine needs Node.js ≥ 20.
+> Installed from GitHub for now (not yet on npm). The repository ships its build output, so there is nothing else to run.
 
 ### 2. Run the relay on your own server
 

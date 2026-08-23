@@ -67,6 +67,10 @@ them, because the properties worth testing here — "the relay cannot read this"
 pnpm typecheck && pnpm test && pnpm build
 ```
 
+`lib/` is committed on purpose — installing from git must not require a build
+step — so **run `pnpm build` and commit the result** whenever `src/` changes.
+A pull request whose `lib/` lags behind `src/` ships stale code to every user.
+
 `noUnusedLocals` and `noUnusedParameters` are on: dead code fails the build
 rather than accumulating.
 

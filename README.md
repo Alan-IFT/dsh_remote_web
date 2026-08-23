@@ -39,7 +39,7 @@ dsh plugin --profile web add github:Alan-IFT/dsh_remote_web
 
 装完就行，**不需要改任何配置文件**。此时远程访问还是关闭的——插件在配对之前不会连接任何地方。
 
-> 目前从 GitHub 安装（尚未发布到 npm）。安装时会自动编译，所以机器上需要有 Node.js ≥ 20。
+> 目前从 GitHub 安装（尚未发布到 npm）。仓库自带编译产物，装完即用，无需额外步骤。
 
 ### 2. 在你自己的服务器上跑中转
 
