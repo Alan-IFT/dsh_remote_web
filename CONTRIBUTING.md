@@ -67,9 +67,10 @@ them, because the properties worth testing here — "the relay cannot read this"
 pnpm typecheck && pnpm test && pnpm build
 ```
 
-`lib/` is committed on purpose — installing from git must not require a build
-step — so **run `pnpm build` and commit the result** whenever `src/` changes.
-A pull request whose `lib/` lags behind `src/` ships stale code to every user.
+`lib/` is committed on purpose, so that installing from git needs no build
+step. Run `pnpm build` and commit the result when `src/` changes — CI rebuilds
+and fails the job on any difference, so a stale `lib/` cannot reach users
+whether or not anyone remembers.
 
 `noUnusedLocals` and `noUnusedParameters` are on: dead code fails the build
 rather than accumulating.

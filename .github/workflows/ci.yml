@@ -1,0 +1,44 @@
+# Typecheck, test, and prove the committed build output matches src/.
+#
+# That last check is the point. `lib/` is committed so installing from git
+# needs no build step, which means a pull request whose `lib/` lags behind
+# `src/` would ship stale code to every user. Asking contributors to remember
+# `pnpm build` is the kind of rule that gets forgotten, so the build runs here
+# and a difference fails the job.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+
+      - run: pnpm test
+
+      - name: Committed build output matches src/
+        run: |
+          pnpm build
+          if ! git diff --quiet -- lib; then
+            echo "::error::lib/ is out of date. Run 'pnpm build' and commit the result."
+            git diff --stat -- lib
+            exit 1
+          fi
