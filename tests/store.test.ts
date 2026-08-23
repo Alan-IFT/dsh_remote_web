@@ -235,11 +235,25 @@ describe('resolving an agent by name', () => {
     expect(store.resolveAgent(record.agentId)?.agentId).toBe(record.agentId)
   })
 
-  it('refuses an ambiguous label rather than guessing', () => {
+  it('never lets a label become ambiguous', () => {
+    // Resolution used to answer "neither" when two live agents shared a label,
+    // which made `agent revoke <label>` report nothing to revoke while both
+    // machines stayed connected. The ambiguity is now refused where it would be
+    // created, so every caller gets one answer without handling that case.
     const store = new RelayStore(statePath)
     store.createAgent('laptop')
-    store.createAgent('laptop')
-    expect(store.resolveAgent('laptop')).toBeUndefined()
+    expect(() => store.createAgent('laptop')).toThrow(/already named/)
+    expect(store.resolveAgent('laptop')).toBeDefined()
+  })
+
+  it('frees a name once its agent is revoked', () => {
+    // Re-pairing a rebuilt machine under its own name must stay possible; only
+    // a live collision is a problem.
+    const store = new RelayStore(statePath)
+    const { record } = store.createAgent('laptop')
+    store.revokeAgent(record.agentId)
+    const replacement = store.createAgent('laptop')
+    expect(store.resolveAgent('laptop')?.agentId).toBe(replacement.record.agentId)
   })
 
   it('ignores revoked agents', () => {

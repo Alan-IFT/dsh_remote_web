@@ -170,6 +170,17 @@ export class RelayStore {
       if (state.agents.some((agent) => agent.agentId === record.agentId)) {
         throw new Error(`agent "${record.agentId}" already exists`)
       }
+      // A label is how every other command names this machine, so two live
+      // agents sharing one is not a cosmetic clash: `resolveAgent` would find
+      // two and answer neither, and `agent revoke <label>` would then report
+      // nothing to revoke while both stayed connected. Refusing here is the
+      // only place that keeps the ambiguity from ever existing.
+      if (state.agents.some((agent) => !agent.revoked && agent.label === label)) {
+        throw new Error(
+          `an active agent is already named "${label}" — pick another name, ` +
+            'or revoke that one first',
+        )
+      }
       return { next: { ...state, agents: [...state.agents, record] }, result: null }
     })
     return { record, privateKey: identity.privateKey, encryptionToken }
@@ -189,19 +200,22 @@ export class RelayStore {
    * Find one agent by id or by label.
    *
    * Labels exist because a person names their machines; requiring them to copy
-   * a UUID back out of `agent add` is friction the tool can absorb. An
-   * ambiguous label resolves to nothing rather than guessing, so the caller can
-   * say so plainly.
+   * a UUID back out of `agent add` is friction the tool can absorb.
    *
-   * @returns The single match, or `undefined` when absent or ambiguous.
+   * A label names at most one live agent because {@link createAgent} refuses to
+   * create a second, so this cannot be ambiguous. It once could, and returning
+   * `undefined` for that case made two very different situations look alike:
+   * `agent revoke <label>` reported nothing to revoke while both machines
+   * stayed connected. The fix belongs at creation, not in every caller's error
+   * message.
+   *
+   * @returns The match, or `undefined` when no live agent has that id or label.
    */
   resolveAgent(idOrLabel: string): AgentRecord | undefined {
-    const byId = this.findAgent(idOrLabel)
-    if (byId !== undefined) return byId
-    const matches = this.#file.value.agents.filter(
-      (agent) => !agent.revoked && agent.label === idOrLabel,
+    return (
+      this.findAgent(idOrLabel) ??
+      this.#file.value.agents.find((agent) => !agent.revoked && agent.label === idOrLabel)
     )
-    return matches.length === 1 ? matches[0] : undefined
   }
 
   /**
