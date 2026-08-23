@@ -15,9 +15,16 @@
  * @module dsh-remote-web/shared/watched-file
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+
+/** How long to wait for another process to finish its update. */
+const LOCK_TIMEOUT_MS = 5_000
+/** After this, a lock is assumed to belong to a process that died. */
+const LOCK_STALE_MS = 30_000
+/** Gap between attempts while waiting. */
+const LOCK_POLL_MS = 10
 
 /**
  * Owner-only JSON file whose in-memory value tracks the file on disk.
@@ -86,9 +93,10 @@ export class WatchedFile<T> {
       parsed = JSON.parse(readFileSync(this.#path, 'utf8'))
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
+      // No `dsh-remote-web:` prefix here; the CLI's failure path adds it, and
+      // naming the tool twice reads like a bug in the tool.
       throw new Error(
-        `dsh-remote-web: ${this.#path} is unreadable (${detail}). ` +
-          'Fix or remove the file before continuing.',
+        `${this.#path} is unreadable (${detail}). Fix or remove the file before continuing.`,
       )
     }
     return this.#parse(parsed)
@@ -123,13 +131,87 @@ export class WatchedFile<T> {
    * earlier would reintroduce the lost-update bug this class exists to
    * prevent.
    *
+   * Reading current state is only half of that guarantee. Another process can
+   * write between this read and this write, and a plain write would erase it —
+   * the same resurrected revocation in a new guise.
+   *
+   * The window is small: one read-modify-write here is well under a
+   * millisecond, and the relay writes on attach and login rather than on every
+   * request, so an unlucky overlap is rare. It is guarded anyway because of
+   * what is lost rather than how often. The operation at risk is revocation,
+   * which is invoked exactly when a credential is compromised, reports success
+   * either way, and competes with the attacker's own attach and login traffic —
+   * so the load that opens the window is correlated with the incident. Batch
+   * writers lose updates outright regardless of timing.
+   *
+   * So the whole read-modify-write is serialized by an exclusive lock. The
+   * {@link value} stamp cannot stand in for one: a touch rewrites a timestamp,
+   * leaving the file the same size within the same millisecond, so the two
+   * writes are indistinguishable to `stat`. The stamp keeps a reader current,
+   * which is what it is for; it cannot detect a concurrent writer.
+   *
+   * `mkdir` is the lock because it is atomic on every POSIX filesystem and on
+   * Windows, needs no dependency, and leaves a visible artifact an operator can
+   * delete. A stale lock from a killed process expires, so a crash cannot wedge
+   * the tool permanently.
+   *
    * @param mutate - Receives current state; return value is persisted.
    * @returns Whatever `mutate` reports, for callers that need a result.
    */
   update<R>(mutate: (current: T) => { next: T; result: R }): R {
-    const { next, result } = mutate(this.value)
-    this.write(next)
-    return result
+    const release = this.#lock()
+    try {
+      const { next, result } = mutate(this.value)
+      this.write(next)
+      return result
+    } finally {
+      release()
+    }
+  }
+
+  /**
+   * Take the write lock, waiting for a holder and breaking a stale one.
+   *
+   * The wait is a blocking sleep because every caller here is synchronous: the
+   * CLI is a short-lived command, and the relay's store writes are small and
+   * infrequent relative to a request. Making this async would recolor the whole
+   * store API for a lock held over a few milliseconds of JSON.
+   */
+  #lock(): () => void {
+    const dir = `${this.#path}.lock`
+    const deadline = Date.now() + LOCK_TIMEOUT_MS
+    for (;;) {
+      try {
+        mkdirSync(dir, { recursive: false })
+        return () => {
+          try {
+            rmSync(dir, { recursive: true, force: true })
+          } catch {
+            // Already gone: another process broke it as stale. Nothing to undo.
+          }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      }
+      // Break a lock whose owner died, so a crash mid-update cannot wedge every
+      // later command. The window is generous relative to the work it guards.
+      try {
+        if (Date.now() - statSync(dir).mtimeMs > LOCK_STALE_MS) {
+          rmSync(dir, { recursive: true, force: true })
+          continue
+        }
+      } catch {
+        continue // Vanished while we looked; try to take it.
+      }
+      if (Date.now() > deadline) {
+        throw new Error(
+          `timed out waiting for ${dir}. ` +
+            'Another process is writing; remove that directory if none is.',
+        )
+      }
+      // Sleep without a busy loop; Atomics.wait is the synchronous primitive.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_POLL_MS)
+    }
   }
 
   /** Whether the file exists on disk. */
