@@ -23,6 +23,10 @@ It does not modify DSH, and it opens no inbound port on your machine.
 - **Your own relay** — no third-party service; traffic passes only through a machine you control.
 - **Two tokens** — an **auth token** decides *who may connect* (the relay stores only a public key) and an **encryption token** binds a browser credential to one machine, so the relay cannot mint a working credential by itself.
 - **The relay you host is the one you trust.** It terminates TLS, so it sees your session in the clear. Run it on a machine you control. There is no in-browser encryption that would change this — see [why](docs/DECISIONS.md#browser-side-end-to-end-encryption-was-removed).
+- **The token crosses the wire once.** A browser enrols a signing key on first
+  login and authenticates by signature after that, so the access token stops
+  being sent. The key is generated non-extractable and kept in IndexedDB, so
+  script on the page cannot read it either.
 - **Revocation is immediate**, taking effect on the very next request.
 - **Minimal surface** — only the DSH web interface is proxied. Terminal sockets and other sensitive channels are refused.
 
@@ -146,9 +150,9 @@ and their answer needs a browser extension plus transparency logs. See
   the signing key.
 - The relay **cannot issue a working browser credential alone**: that needs the
   encryption token, which only your machine holds.
-- TLS covers both hops. Note that the browser access token is sent on every
-  login, so **the TLS in front of the relay is what protects it** — see
-  [Without TLS?](#without-tls) before running one on a hostile network.
+- TLS covers both hops, and the browser access token is sent only on the first
+  login; after that a browser proves itself with a single-use challenge
+  signature, so a captured request yields nothing reusable.
 
 If you need a relay that genuinely cannot read your traffic, the encryption has
 to live in the transport rather than in browser-delivered code; a Noise-based

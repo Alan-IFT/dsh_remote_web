@@ -72,3 +72,31 @@ describe('enrollment', () => {
     expect(store.verifyClientSignature('ch', sig, Date.now() + 5000)).toBeUndefined()
   })
 })
+
+describe('the login page client', () => {
+  // The browser half is inline script, so these guard the two mistakes that a
+  // unit test can still catch: a page that will not parse, and the reload loop
+  // a real browser walked into during development.
+  it('parses as JavaScript', async () => {
+    const { renderLoginPage } = await import('../src/relay/pages.js')
+    const script = /<script>([\s\S]*?)<\/script>/.exec(renderLoginPage())?.[1] ?? ''
+    expect(script).not.toBe('')
+    expect(() => new Function(script)).not.toThrow()
+  })
+
+  it('starts the enrolment block with a semicolon', async () => {
+    // Without it, ASI joins the IIFE to the statement above and the whole
+    // script throws before any handler is registered — which disabled the
+    // pairing-code trimming too, not just enrolment.
+    const { renderLoginPage } = await import('../src/relay/pages.js')
+    expect(renderLoginPage()).toContain(';(function ()')
+  })
+
+  it('leaves the login page after a signature login instead of reloading it', async () => {
+    // reload() re-runs the same script, which signs in again, forever.
+    const { renderLoginPage } = await import('../src/relay/pages.js')
+    const page = renderLoginPage()
+    expect(page).not.toContain('location.reload')
+    expect(page).toContain('window.location.href')
+  })
+})
