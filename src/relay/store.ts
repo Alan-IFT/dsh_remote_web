@@ -87,9 +87,13 @@ export interface IssuedCredential<T> {
  * Result of registering an agent.
  *
  * Two independent secrets leave the relay here and are never retained by it:
- * the signing key proves identity, and the encryption token protects payloads.
- * The relay keeps only the public key, so it can admit this agent without being
- * able to impersonate it or read its traffic.
+ * the signing key proves identity, and the encryption token binds browser
+ * credentials to this machine. The relay keeps only the public key, so it can
+ * admit this agent without being able to impersonate it, and cannot mint a
+ * working browser credential for it alone.
+ *
+ * It can still read the session: it terminates TLS. That is the trust the
+ * design asks for, and `SECURITY.md` says so rather than implying otherwise.
  */
 export interface IssuedAgent {
   record: AgentRecord

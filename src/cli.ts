@@ -438,9 +438,12 @@ function registerAgent(store: RelayStore, args: Args, fallbackUrl: string): void
     say(`      above embeds ${url}, which must be reachable from your devices.`)
     say()
   }
+  // Says what the relay cannot do, and stops there. It terminates TLS, so it
+  // can read the session; claiming otherwise here would be the same false
+  // assurance that got the browser encryption mode removed.
   say('Shown once. It carries this machine\'s signing key and encryption token,')
-  say('neither of which the relay keeps — it can admit this machine, and neither')
-  say('impersonate it nor read its traffic.')
+  say('neither of which the relay keeps — so it cannot impersonate this machine,')
+  say('nor issue a browser credential for it on its own.')
 }
 
 /** `agent …`: manage which machines may attach. */
