@@ -26,7 +26,7 @@ node lib/cli.js relay --host 127.0.0.1 --port 8787 --state /tmp/relay.json --no-
 # terminal 2 — register a machine and pair it
 export DSH_REMOTE_WEB_URL=http://127.0.0.1:8787
 node lib/cli.js agent add dev --state /tmp/relay.json
-node lib/cli.js setup <printed-code> --allow-insecure --require-e2e
+node lib/cli.js setup <printed-code> --allow-insecure
 
 # issue a browser credential (needs both machines, by design)
 node lib/cli.js client add browser --agent dev --state /tmp/relay.json

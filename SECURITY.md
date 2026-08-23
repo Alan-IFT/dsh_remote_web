@@ -20,12 +20,13 @@ and a reproduction. Expect an acknowledgement within a few days.
 
 ### What the design assumes is trustworthy
 
-- **NOT the relay, when `--require-e2e` is on.** It holds only public keys and
-  routes ciphertext it cannot read. Without that flag it does see plaintext, so
-  enable it — or host the relay yourself and accept that trust.
-- **The DSH machine**, and any local user who can read `$DSH_HOME`.
-- **The token holder.** A valid token reaches the conversation surface of the
-  machines it is scoped to.
+- **The relay.** It terminates TLS, so it sees your session in the clear. Host
+  it on a machine you control. It still cannot impersonate your computer (it
+  holds only a public key) and cannot issue a working browser credential by
+  itself (that needs the encryption token, which it never receives) — but it
+  can read what passes through. In-browser encryption cannot remove this trust,
+  because the relay is what serves the browser its code; see
+  [docs/DECISIONS.md](docs/DECISIONS.md#browser-side-end-to-end-encryption-was-removed).
 - **The DSH machine itself**, and any local user who can read `$DSH_HOME`. The
   credential file is mode `0600`, so control is limited to the owning user.
 - **The token holder.** A valid token reaches everything the DSH surface
@@ -72,36 +73,33 @@ party read?* — so the credential is split, and both halves are required:
   bound by an unauthenticated caller.
 - State files are written atomically with mode `0600`.
 
-### End-to-end encryption
+### Why there is no in-browser end-to-end encryption
 
-Active and verified end to end. Enable it per machine with
-`dsh-remote-web setup <code> --require-e2e`.
+An opt-in `--require-e2e` mode once sealed browser traffic so the relay would
+route ciphertext. It was removed, because it could not deliver that property.
 
-The envelope travels as two request headers, so **the relay contains no
-encryption code at all** — it forwards headers verbatim, which is why there is
-no second code path that could diverge from the plaintext one and no relay
-change that could weaken it.
+The JavaScript performing the encryption was served **by the relay**, and the
+relay is exactly the party the mode distrusts. A malicious or compelled relay
+serves a build that leaks the token, and nothing in the page can detect it. A
+Service Worker does not help: it is delivered the same way.
 
-- Each exchange is sealed with **AES-256-GCM** under a key derived by HKDF from
-  an **X25519** exchange *and* the encryption token. Both inputs are required:
-  the ephemeral exchange provides forward secrecy, and folding in the token
-  means a relay that substituted its own public key still derives nothing.
-- The request path, headers, and body all travel inside the envelope, as do
-  event-stream frames — the channel carrying the assistant's reply text. The
-  relay sees an opaque blob, an exchange id, and a size.
-- Stream frames are authenticated against the stream path, not the
-  relay-assigned socket id, so a relay cannot move a frame between the two
-  downlinks; it assigns that id, so binding to it would let it choose its own
-  authenticated data.
-- GCM's tag authenticates as well as encrypts, so a relay that modified a byte
-  causes a decryption failure rather than altered content.
-- The exchange id is bound as additional authenticated data, so a valid payload
-  replayed onto a different exchange fails.
-- **Downgrade is refused by the host, not the relay.** With `requireE2e`
-  enabled, a host answers 403 to any request that did not arrive encrypted —
-  a relay that stripped the envelope cannot silently obtain a readable session.
-- The browser half runs in WebCrypto and is served as readable source at
-  `/__e2e/client.js`; the token stays in tab memory and is never persisted.
+This is the general limitation of browser-delivered cryptography, stated by
+Freedom of the Press Foundation as ["if you don't trust the server not to keep
+user secrets, you can't trust them to deliver security
+code"](https://securedrop.org/news/browser-based-cryptography/). Their answer,
+[WEBCAT](https://github.com/freedomofpress/webcat), needs a browser extension
+plus signing and transparency logs — the assurance has to come from outside the
+page. Subresource Integrity does not close it either, since a compromised
+server generates the hashes.
+
+Shipping the feature anyway would have produced a false assurance, which is
+worse than none: a user who believes the relay cannot read the session behaves
+differently from one who knows it can.
+
+What protects you instead: TLS to a relay **you** host, an agent key the relay
+cannot forge, and a browser credential the relay cannot mint alone. If you need
+a relay that genuinely cannot read your traffic, use a transport that does not
+depend on browser-delivered code — the Noise-based alternative linked above.
 
 ### Sessions
 

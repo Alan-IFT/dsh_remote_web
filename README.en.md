@@ -21,8 +21,8 @@ It does not modify DSH, and it opens no inbound port on your machine.
 - **Access from anywhere** — phone, tablet, another laptop; the interface is DSH's own web surface.
 - **No public IP, no port forwarding** — works from home broadband, an office LAN, hotel Wi-Fi, or behind carrier-grade NAT.
 - **Your own relay** — no third-party service; traffic passes only through a machine you control.
-- **Two tokens** — an **auth token** decides *who may connect* (the relay stores only a public key) and an **encryption token** decides *who may read* (the relay never receives it).
-- **End-to-end encryption works** (`setup --require-e2e`): the relay forwards ciphertext it cannot read, and contains **no encryption code at all** — the envelope rides as request headers it already forwards verbatim.
+- **Two tokens** — an **auth token** decides *who may connect* (the relay stores only a public key) and an **encryption token** binds a browser credential to one machine, so the relay cannot mint a working credential by itself.
+- **The relay you host is the one you trust.** It terminates TLS, so it sees your session in the clear. Run it on a machine you control. There is no in-browser encryption that would change this — see [why](docs/DECISIONS.md#browser-side-end-to-end-encryption-was-removed).
 - **The token crosses the wire once.** After the first login a browser authenticates by signature, so even a plain-HTTP relay leaks no reusable credential.
 - **Revocation is immediate**, taking effect on the very next request.
 - **Minimal surface** — only the DSH web interface is proxied. Terminal sockets and other sensitive channels are refused.
@@ -125,32 +125,35 @@ session. So the credential is split, and **both halves are required**:
   handed to you once in the pairing code, and used only between your machine
   and the browsers you authorize.
 
-### End-to-end encryption
+### What the relay can see
 
-Working and verified against a live DSH: the correct encryption token returns
-200, a wrong one returns 403.
+The relay **terminates TLS**, so it sees your session in the clear. That is
+inherent to a self-hosted reverse proxy, not a defect.
 
-The envelope travels as **two request headers**, so the relay holds no
-encryption code (verified: zero references). That is both the smallest possible
-implementation and the reason there is no second code path to drift from the
-plaintext one.
+An opt-in in-browser encryption mode once claimed to remove this. It was
+**removed**, because it could not deliver the claim: the JavaScript doing the
+encryption was served *by the relay*, and the relay is exactly the party the
+mode distrusted. A malicious or compelled relay serves a build that leaks the
+token, and nothing in the page can detect it. This is the general limitation of
+browser-delivered cryptography — Freedom of the Press Foundation put it as
+["if you don't trust the server not to keep user secrets, you can't trust them
+to deliver security code"](https://securedrop.org/news/browser-based-cryptography/),
+and their answer needs a browser extension plus transparency logs. See
+[docs/DECISIONS.md](docs/DECISIONS.md#browser-side-end-to-end-encryption-was-removed).
 
-- **Both the HTTP plane and the event stream are encrypted.** The stream is how the assistant's reply text arrives, chunk by chunk, so it uses the same sealing rather than being left as an exception.
-- Each exchange is sealed with **AES-256-GCM** under a key derived by HKDF from
-  an **X25519** ephemeral exchange *and* the encryption token. Both are needed:
-  the exchange gives forward secrecy, and the token means **a relay that swaps
-  in its own public key still derives nothing**.
-- Path, headers, and body all travel inside the envelope. The relay sees opaque
-  bytes, an exchange id, and a length.
-- GCM authenticates as well as encrypts, so **a modified byte fails decryption**
-  rather than becoming different content.
-- The exchange id is bound as AAD, so a valid payload replayed onto another
-  exchange fails.
-- **The host refuses downgrade, not the relay.** With `requireE2e` enabled, a
-  host answers 403 to any unencrypted request, so stripping the envelope cannot
-  buy a readable session.
-- The browser half uses WebCrypto and is served as **readable source** at
-  `/__e2e/client.js`; the token stays in tab memory.
+**So run the relay on a machine you control.** What still holds:
+
+- The relay **cannot impersonate your computer**: it stores a public key, never
+  the signing key.
+- The relay **cannot issue a working browser credential alone**: that needs the
+  encryption token, which only your machine holds.
+- TLS covers both hops, and the browser token crosses the wire once — after
+  that a browser authenticates by signature.
+
+If you need a relay that genuinely cannot read your traffic, the encryption has
+to live in the transport rather than in browser-delivered code; a Noise-based
+alternative exists in
+[deepseek-harness-remote](https://github.com/liguobao/deepseek-harness-remote).
 
 ### Authentication
 

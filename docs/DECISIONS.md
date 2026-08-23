@@ -197,62 +197,52 @@ One owner for the prefix means it cannot be doubled or forgotten.
 
 ---
 
-## `--require-e2e` is off by default, and cannot currently be turned on
+## Browser-side end-to-end encryption was removed
 
-**Decision.** `requireE2e` defaults to false. The relay is trusted with
-plaintext, and `README`/`SECURITY.md` say so plainly.
+**Decision.** The opt-in `--require-e2e` mode, the browser crypto client, and
+the payload sealing that served them are gone. The relay terminates TLS and
+sees session plaintext; `README` and `SECURITY.md` say so directly.
 
-**Why it cannot yet be enabled — a bootstrap deadlock.** Both crypto sides are
-complete and tested. What is missing is a way to seal the *first* request:
+**Why it could not work.** The mode's premise is that the relay is untrusted.
+But the JavaScript that performed the encryption was served *by the relay*, at
+`/__e2e/client.js`, and so was the login page that handled the encryption
+token. A malicious or legally compelled relay serves a build that leaks the
+token on first use, and no code inside the page can detect it. The feature
+defended against an adversary who controlled the defence.
 
-1. The login page is relay-owned HTML. It loads `/__e2e/client.js` and keeps
-   the encryption token in the tab. This works.
-2. The browser then navigates to `/a/<agent>/`. A top-level navigation is a
-   plain browser GET; no `fetch` wrapper is involved, so it carries no
-   `x-dshrw-sealed` header.
-3. With `requireE2e` on, the host refuses that unsealed request with 403
-   (`tunnel.ts`, the `else if (this.#credentials.requireE2e)` branch).
-4. The shim that would arm encryption is injected into HTML responses only
-   when `#contexts.has(frame.rid)` — that is, only for requests that already
-   arrived sealed.
+A Service Worker — the earlier plan recorded here — does not fix this. It is
+delivered by the same relay. It would have solved the *mechanical* problem (a
+top-level navigation cannot carry a header, and `fetch` wrapping misses
+`<script src>`, `<link href>`, images and fonts) while leaving the *trust*
+problem untouched.
 
-So the page that installs encryption can only arrive through a request that is
-already encrypted. Turning the flag on today makes a fresh install answer 403 to
-everything. A security setting that only breaks the product protects nobody.
+**This is a known general result, not a local mistake.** Freedom of the Press
+Foundation states it as ["if you don't trust the server not to keep user
+secrets, you can't trust them to deliver security
+code"](https://securedrop.org/news/browser-based-cryptography/). Their answer,
+[WEBCAT](https://github.com/freedomofpress/webcat), needs a Firefox extension,
+Sigsum/Sigstore transparency logs and an out-of-band preload list: the
+assurance must originate outside the page. Their own requirement is that such a
+system **fail closed**, and that a warning is not sufficient. Subresource
+Integrity does not help, because a compromised server also generates the
+hashes.
 
-**Also incomplete.** The `fetch` wrapper seals request *metadata* only; the body
-rides as-is (`browser-crypto.ts`, "Only the metadata is sealed here"). Response
-bodies are sealed by the host.
+**Why removal rather than keeping it as defence-in-depth.** It was advertised as
+"the relay forwards ciphertext it cannot read". A user who believes that
+behaves differently from one who knows the relay can read the session — they
+may route traffic through a host they would otherwise avoid. A false assurance
+is worse than none. Keeping the code while restating it as "only defends
+against passive logging" would have preserved several hundred lines to defend
+against an adversary the TLS layer already covers.
 
-**Why this is structural, not unfinished wiring.** Nearly all the machinery is
-already here and tested: the login page stores the token in `sessionStorage`,
-`/__e2e/host` publishes the host public key, `resume()` re-arms from that pair,
-the wrappers seal once installed, and the relay forwards the envelope header
-verbatim. What blocks it is not a missing call. **A top-level navigation is
-issued by the browser, so no script can attach a header to it** — and the same
-is true of every `<script src>`, `<link href>`, `<img src>` and font the DSH
-shell pulls in. The `fetch` wrapper cannot see any of them.
+**What was kept, and why.** The two-token pairing model stays: the encryption
+token still binds a browser credential to one machine, so the relay cannot mint
+a working credential alone, and `agent add` plus `invite` still require both
+sides. Agent authentication stays Ed25519, so reading the relay's disk does not
+let it impersonate a machine. Those properties never depended on
+browser-delivered code.
 
-**What would actually close it: a Service Worker.** It is the only mechanism
-that can intercept browser-originated subresource requests, so it is the only
-way to seal the whole surface rather than the fraction that goes through
-`fetch`. That means: a worker that seals and opens every request in scope,
-registration and update lifecycle, key handoff by `postMessage`, re-keying when
-the host reconnects, and a defined behaviour where workers are unavailable
-(private mode, plain-HTTP origins). The existing `fetch`/WebSocket wrappers
-would then be redundant. This is a feature with its own threat model, not a
-patch.
-
-**Rejected — exempting HTML navigations.** Far less code, and strictly worse: it
-reopens precisely the downgrade path `requireE2e` exists to close. A hostile
-relay would serve its own shell and the user could not tell.
-
-**Rejected — bootstrapping from a relay-owned page without a worker.** The
-navigation problem is solvable this way (the relay already owns `/` and the
-picker, which carry no DSH data), but it leaves every subresource unsealed. It
-would make the flag *appear* to work while protecting only part of the traffic,
-which is worse than an honest "off".
-
-**Do not** flip the default without closing this. The flag is honest today
-precisely because it is documented as off, and `SECURITY.md` states that the
-relay sees plaintext without it.
+**If you need a relay that cannot read your traffic**, the transport itself has
+to carry the encryption, outside the browser — for example the Noise-based
+alternative linked from `SECURITY.md`. That is a different architecture, not a
+flag.

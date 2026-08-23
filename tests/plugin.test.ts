@@ -115,7 +115,6 @@ describe('file-based control surface', () => {
       encryptionToken: 'token-value',
       label: 'test-machine',
       enabled: true,
-      requireE2e: true,
     })
 
     const deadline = Date.now() + 8000
@@ -142,7 +141,6 @@ describe('file-based control surface', () => {
       encryptionToken: 'token-value',
       label: 'test-machine',
       enabled: true,
-      requireE2e: true,
     })
     mount({ port: 3080, host: '127.0.0.1' }, { credentialPath })
     await nextStatus(credentialPath)
@@ -168,7 +166,6 @@ describe('file-based control surface', () => {
       encryptionToken: token,
       label: 'test-machine',
       enabled: true,
-      requireE2e: true,
     })
     mount({ port: 3080, host: '127.0.0.1' }, { credentialPath })
     await nextStatus(credentialPath)
@@ -188,7 +185,6 @@ describe('file-based control surface', () => {
       encryptionToken: 'token-value',
       label: 'test-machine',
       enabled: false,
-      requireE2e: true,
     })
     // The credential file holds a bearer token; another local user must not
     // be able to read it.
@@ -205,17 +201,19 @@ describe('file-based control surface', () => {
       encryptionToken: 'token-value',
       label: 'test-machine',
       enabled: true,
-      requireE2e: true,
     })
     mount({ port: 3080, host: '127.0.0.1' }, { credentialPath, enabled: false })
     expect((await nextStatus(credentialPath)).state).toBe('disabled')
   })
 })
 
-describe('encryption posture changes', () => {
-  it('rebuilds the tunnel when requireE2e is toggled', async () => {
-    // The rebuild signature must cover posture: otherwise `disable E2E` would
-    // report success while the live tunnel kept refusing plaintext.
+describe('credential changes', () => {
+  it('rebuilds the tunnel when a credential the tunnel holds changes', async () => {
+    // The rebuild signature must cover every value the live client captured at
+    // construction: a re-pair that only rewrote the file would otherwise report
+    // success while the running tunnel kept using the old credential until the
+    // next restart. The published fingerprint comes from the client itself, so
+    // it moves only if the client was actually rebuilt.
     const credentialPath = join(dir, 'agent.json')
     const credentials = openCredentials(credentialPath)
     credentials.write({
@@ -226,19 +224,19 @@ describe('encryption posture changes', () => {
       encryptionToken: 'token-value',
       label: 'test-machine',
       enabled: true,
-      requireE2e: true,
     })
     mount({ port: 3080, host: '127.0.0.1' }, { credentialPath })
-    await nextStatus(credentialPath)
+    const before = (await nextStatus(credentialPath)).tokenFingerprint
+    expect(before).not.toBeNull()
 
-    credentials.write({ ...(credentials.value as never), requireE2e: false })
+    credentials.write({ ...(credentials.value as never), encryptionToken: 'rotated-token' })
 
     const deadline = Date.now() + 8000
     while (Date.now() < deadline) {
       const snapshot = await nextStatus(credentialPath)
-      if (snapshot.state !== 'unconfigured') return
+      if (snapshot.tokenFingerprint !== null && snapshot.tokenFingerprint !== before) return
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
-    throw new Error('plugin never reacted to the posture change')
+    throw new Error('plugin never rebuilt the tunnel for the new credential')
   })
 })

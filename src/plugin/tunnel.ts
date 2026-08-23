@@ -20,7 +20,6 @@ import WebSocket from 'ws'
 
 import {
   CLOSE_AUTH_FAILED,
-  CLOSE_E2E_REQUIRED,
   CLOSE_REVOKED,
   CLOSE_UNSUPPORTED_VERSION,
   HEARTBEAT_TIMEOUT_MS,
@@ -30,28 +29,17 @@ import {
   MAX_WS_MESSAGE_BYTES,
   PROTOCOL_VERSION,
   RELAY_AGENT_PATH,
-  E2E_ENVELOPE_HEADER,
-  E2E_ID_HEADER,
-  E2E_KEY_PARAM,
   agentChallenge,
   parseFrame,
   type HttpRequestFrame,
-  type SealedEnvelope,
   type TunnelFrame,
   type WsOpenFrame,
 } from '../shared/protocol.js'
 import { fingerprint, hashToken } from '../shared/auth.js'
-import {
-  deriveSessionKey,
-  generateEphemeralKeyPair,
-  open as openSealed,
-  seal,
-  signMessage,
-} from '../shared/crypto.js'
+import { signMessage } from '../shared/crypto.js'
 import {
   isAllowedWebSocketPath,
   isSafeProxyPath,
-  readEnvelopeHeader,
   rewriteRequestHeaders,
   rewriteResponseHeaders,
 } from '../shared/headers.js'
@@ -85,7 +73,6 @@ export interface TunnelStatus {
 const TERMINAL_CLOSE_CODES = new Set([
   CLOSE_AUTH_FAILED,
   CLOSE_UNSUPPORTED_VERSION,
-  CLOSE_E2E_REQUIRED,
   CLOSE_REVOKED,
 ])
 
@@ -127,31 +114,6 @@ export class TunnelClient {
   readonly #requests = new Map<string, { upstream: ClientRequest; received: number }>()
   /** Proxied sockets to the local DSH server, keyed by the relay's socket id. */
   readonly #sockets = new Map<string, WebSocket>()
-  /**
-   * Session key per exchange, present only for end-to-end encrypted requests.
-   *
-   * Derived from the browser's ephemeral public key and this machine's
-   * encryption token, so the relay — which has neither — cannot reconstruct it
-   * even though it carried the handshake.
-   */
-  /**
-   * Encryption state per encrypted context, keyed by exchange id or socket id.
-   *
-   * One table serves both planes because they need the same two things: the
-   * session key, and the value that key's payloads are authenticated against.
-   * Only the AAD differs — an HTTP exchange binds to its request id, a stream
-   * binds to its path — and that difference is data, not structure.
-   */
-  readonly #contexts = new Map<string, { key: Buffer; aad: string }>()
-
-  /**
-   * This host's ephemeral X25519 keypair for the lifetime of the client.
-   *
-   * Browsers combine their own ephemeral key with this one and the shared
-   * encryption token, so the relay carrying both public keys still derives
-   * nothing.
-   */
-  readonly #ephemeral = generateEphemeralKeyPair()
 
   constructor(
     credentials: AgentCredentials,
@@ -165,51 +127,30 @@ export class TunnelClient {
   }
 
   /**
-   * This host's ephemeral public key.
+   * Serve one exchange directly, bypassing the relay socket.
    *
-   * A browser needs it to derive the session key. It is public by design: on
-   * its own it yields nothing, because deriving the key also requires the
-   * encryption token, which the relay never receives.
+   * Exposed so tests can drive the real proxy path against a live local server
+   * without standing up a relay. It uses exactly the production code path;
+   * nothing here is a test-only shortcut.
    */
-  get publicKey(): string {
-    return this.#ephemeral.publicKey
-  }
-
-  /**
-   * Serve one sealed exchange directly, bypassing the relay socket.
-   *
-   * Exposed so tests can drive the real decrypt → proxy → encrypt path against
-   * a live local server without standing up a browser. It uses exactly the
-   * production code path; nothing here is a test-only shortcut.
-   */
-  async handleSealedRequestForTest(
-    rid: string,
-    envelope: SealedEnvelope,
-  ): Promise<{ status: number; bodyEnvelope: SealedEnvelope }> {
-    return await this.#captureExchange(rid, () => {
-      this.#openLocalRequest({
-        type: 'http.request',
-        rid,
-        method: 'GET',
-        path: '/',
-        // Exercised through the same header carrier production uses, so the
-        // seam cannot pass while the real path is broken.
-        headers: {
-          [E2E_ID_HEADER]: rid,
-          [E2E_ENVELOPE_HEADER]: Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64url'),
-        },
-        noBody: true,
-        clientId: 'test',
-      })
-    })
-  }
-
-  /** Serve one unencrypted exchange directly; see {@link handleSealedRequestForTest}. */
   async handlePlainRequestForTest(
     rid: string,
     path: string,
   ): Promise<{ status: number; body: string }> {
-    const captured = await this.#captureExchange(rid, () => {
+    const original = this.#testSink
+    return await new Promise((resolve) => {
+      let status = 0
+      let body = ''
+      this.#testSink = (frame) => {
+        if (frame.type === 'http.response' && frame.rid === rid) status = frame.status
+        if (frame.type === 'body.chunk' && frame.rid === rid) {
+          body += Buffer.from(frame.data, 'base64').toString('utf8')
+        }
+        if (frame.type === 'body.end' && frame.rid === rid) {
+          this.#testSink = original
+          resolve({ status, body })
+        }
+      }
       this.#openLocalRequest({
         type: 'http.request',
         rid,
@@ -220,41 +161,9 @@ export class TunnelClient {
         clientId: 'test',
       })
     })
-    return { status: captured.status, body: captured.plainBody }
   }
 
-  /**
-   * Intercept the frames one exchange would have sent to the relay.
-   *
-   * The interception point is `#send`, so the frames observed are byte-for-byte
-   * the ones a relay would receive — which is what makes the confidentiality
-   * assertions meaningful.
-   */
-  async #captureExchange(
-    rid: string,
-    start: () => void,
-  ): Promise<{ status: number; bodyEnvelope: SealedEnvelope; plainBody: string }> {
-    const original = this.#testSink
-    return await new Promise((resolve) => {
-      let status = 0
-      let bodyEnvelope: SealedEnvelope = { epk: '', salt: '', n: '', c: '', t: '' }
-      let plainBody = ''
-      this.#testSink = (frame) => {
-        if (frame.type === 'http.response' && frame.rid === rid) status = frame.status
-        if (frame.type === 'body.chunk' && frame.rid === rid) {
-          if (frame.sealed !== undefined) bodyEnvelope = frame.sealed
-          else plainBody += Buffer.from(frame.data, 'base64').toString('utf8')
-        }
-        if (frame.type === 'body.end' && frame.rid === rid) {
-          this.#testSink = original
-          resolve({ status, bodyEnvelope, plainBody })
-        }
-      }
-      start()
-    })
-  }
-
-  /** Optional frame interceptor used by the test seams above. */
+  /** Optional frame interceptor used by the test seam above. */
   #testSink: ((frame: TunnelFrame) => void) | null = null
 
   /** Current status snapshot. */
@@ -310,7 +219,6 @@ export class TunnelClient {
       entry.upstream.destroy()
     }
     this.#requests.clear()
-    this.#contexts.clear()
     for (const socket of this.#sockets.values()) {
       try {
         socket.close(1001, 'tunnel closed')
@@ -319,7 +227,6 @@ export class TunnelClient {
       }
     }
     this.#sockets.clear()
-    
   }
 
   /** Absolute WebSocket URL of the relay's agent endpoint. */
@@ -379,8 +286,6 @@ export class TunnelClient {
           ),
           label: this.#credentials.label,
           agentVersion: '0.1.0',
-          e2e: this.#credentials.requireE2e,
-          epk: this.#ephemeral.publicKey,
         }),
       )
     })
@@ -511,12 +416,6 @@ export class TunnelClient {
       case 'ws.message': {
         const socketToLocal = this.#sockets.get(frame.sid)
         if (socketToLocal === undefined || socketToLocal.readyState !== WebSocket.OPEN) return
-        if (frame.sealed !== undefined) {
-          const opened = this.#openFor(frame.sid, frame.sealed)
-          if (opened === null) return
-          socketToLocal.send(opened)
-          return
-        }
         if (frame.kind === 'text') socketToLocal.send(frame.data)
         else socketToLocal.send(Buffer.from(frame.data, 'base64'))
         return
@@ -524,7 +423,6 @@ export class TunnelClient {
       case 'ws.close': {
         const socketToLocal = this.#sockets.get(frame.sid)
         this.#sockets.delete(frame.sid)
-        this.#contexts.delete(frame.sid)
         if (socketToLocal === undefined) return
         try {
           socketToLocal.close(
@@ -542,82 +440,6 @@ export class TunnelClient {
   }
 
   /**
-   * Establish an encryption context from a peer's envelope, and open it.
-   *
-   * The counterpart to {@link #openFor}, which uses a context already
-   * established. HTTP establishes one per request because each request carries
-   * its own ephemeral key; a stream establishes one at open and reuses it. The
-   * two planes differ in when this runs, not in what it does.
-   *
-   * @returns Plaintext, or `null` when authentication fails — covering a
-   *          tampered payload, a wrong token, and a misdirected one alike.
-   */
-  #establishContext(envelope: SealedEnvelope, id: string): Buffer | null {
-    try {
-      const key = deriveSessionKey(
-        this.#ephemeral.privateKey,
-        envelope.epk,
-        this.#credentials.encryptionToken,
-      )
-      const plaintext = openSealed({ n: envelope.n, c: envelope.c, t: envelope.t }, key, id)
-      if (plaintext !== null) this.#contexts.set(id, { key, aad: id })
-      return plaintext
-    } catch {
-      return null
-    }
-  }
-
-  /**
-   * Seal an outbound payload for whichever peer owns this context.
-   *
-   * @param id - Exchange id for an HTTP response, socket id for a stream frame.
-   * @returns The envelope, or `null` when that context is not encrypted, which
-   *          is how the plaintext path stays a single branch at each call site.
-   */
-  #sealFor(id: string, plaintext: Buffer): SealedEnvelope | null {
-    const context = this.#contexts.get(id)
-    if (context === undefined) return null
-    const sealed = seal(plaintext, context.key, context.aad)
-    return {
-      epk: this.#ephemeral.publicKey,
-      salt: '',
-      n: sealed.n,
-      c: sealed.c,
-      t: sealed.t,
-    }
-  }
-
-  /**
-   * Open an inbound payload on an established context.
-   *
-   * @returns Plaintext, or `null` when authentication fails — covering a
-   *          tampered frame, a wrong token, and a frame moved to another
-   *          context alike.
-   */
-  #openFor(id: string, envelope: SealedEnvelope): Buffer | null {
-    const context = this.#contexts.get(id)
-    if (context === undefined) return null
-    return openSealed({ n: envelope.n, c: envelope.c, t: envelope.t }, context.key, context.aad)
-  }
-
-  /** Answer an exchange with a plain status and no upstream call. */
-  #refuse(rid: string, status: number, reason: string): void {
-    this.#send({
-      type: 'http.response',
-      rid,
-      status,
-      headers: { 'content-type': 'text/plain; charset=utf-8' },
-    })
-    this.#send({
-      type: 'body.chunk',
-      rid,
-      data: Buffer.from(reason, 'utf8').toString('base64'),
-    })
-    this.#send({ type: 'body.end', rid })
-    this.#contexts.delete(rid)
-  }
-
-  /**
    * Re-issue a forwarded request against the local DSH server.
    *
    * The request is rebuilt rather than replayed: headers are rewritten so DSH
@@ -630,102 +452,35 @@ export class TunnelClient {
       return
     }
 
-    // End-to-end layer. The envelope arrives either as a frame field or in the
-    // browser's own headers, which the relay forwards verbatim without needing
-    // to understand them.
-    const sealed = readEnvelopeHeader(frame.headers)
-    const rid = frame.headers[E2E_ID_HEADER] ?? frame.rid
-    let request: { method: string; path: string; headers: Record<string, string> }
-    if (sealed !== undefined) {
-      const opened = this.#establishContext(sealed, rid)
-      if (opened === null) {
-        this.#refuse(frame.rid, 403, 'end-to-end decryption failed')
-        return
-      }
-      try {
-        request = JSON.parse(opened.toString('utf8')) as typeof request
-      } catch {
-        this.#refuse(frame.rid, 400, 'malformed encrypted request')
-        return
-      }
-      if (!isSafeProxyPath(request.path)) {
-        this.#refuse(frame.rid, 400, 'invalid path')
-        return
-      }
-      // Responses must seal under the id the browser will verify against,
-      // which is its own — not the one the relay assigned.
-      const opened2 = this.#contexts.get(rid)
-      if (opened2 !== undefined) this.#contexts.set(frame.rid, opened2)
-    } else if (this.#credentials.requireE2e) {
-      // A relay that stripped the envelope would downgrade the session to
-      // something it can read; refusing is the whole point of requiring E2E.
-      this.#refuse(frame.rid, 403, 'this host requires end-to-end encryption')
-      return
-    } else {
-      request = { method: frame.method, path: frame.path, headers: frame.headers }
-    }
-
     // Presented as the named remote authority, so DSH refuses its privileged
     // plane on its own terms rather than ours.
-    const headers = rewriteRequestHeaders(request.headers)
+    const headers = rewriteRequestHeaders(frame.headers)
 
     const upstream = httpRequest(
       {
         host: this.#config.localHost,
         port: this.#config.localPort,
-        method: request.method,
-        path: request.path,
+        method: frame.method,
+        path: frame.path,
         headers,
       },
       (response: IncomingMessage) => {
         const responseHeaders = rewriteResponseHeaders(response.headers)
-        const sealedHead = this.#sealFor(
-          frame.rid,
-          Buffer.from(JSON.stringify(responseHeaders), 'utf8'),
-        )
         this.#send({
           type: 'http.response',
           rid: frame.rid,
           status: response.statusCode ?? 502,
-          // Headers move inside the envelope when encrypted; the relay sees an
-          // empty map rather than the response metadata.
-          headers: sealedHead === null ? responseHeaders : {},
-          ...(sealedHead === null ? {} : { sealed: sealedHead }),
+          headers: responseHeaders,
         })
-        const isHtml = (responseHeaders['content-type'] ?? '').includes('text/html')
-        response.on('data', (rawChunk: Buffer) => {
-          // Inject the resume shim into the app shell so the page re-arms
-          // encryption after the login redirect. Done here rather than at the
-          // relay because the host already owns this response and knows its own
-          // public key, so no buffering proxy layer is needed.
-          const chunk =
-            isHtml && this.#contexts.has(frame.rid)
-              ? Buffer.from(
-                  rawChunk
-                    .toString('utf8')
-                    .replace(
-                      '<head>',
-                      `<head><script src="/__e2e/client.js"></script><script>` +
-                        `window.__dshRemoteWebE2E__&&window.__dshRemoteWebE2E__.resume(` +
-                        `${JSON.stringify(this.#ephemeral.publicKey)});</script>`,
-                    ),
-                  'utf8',
-                )
-              : rawChunk
+        response.on('data', (chunk: Buffer) => {
           for (let offset = 0; offset < chunk.length; offset += MAX_BODY_CHUNK_BYTES) {
             const slice = chunk.subarray(offset, offset + MAX_BODY_CHUNK_BYTES)
-            const sealed = this.#sealFor(frame.rid, slice)
-            this.#send(
-              sealed === null
-                ? { type: 'body.chunk', rid: frame.rid, data: slice.toString('base64') }
-                : { type: 'body.chunk', rid: frame.rid, data: '', sealed },
-            )
+            this.#send({ type: 'body.chunk', rid: frame.rid, data: slice.toString('base64') })
           }
         })
         response.on('end', () => {
           this.#send({ type: 'body.end', rid: frame.rid })
           this.#requests.delete(frame.rid)
-          this.#contexts.delete(frame.rid)
         })
         response.on('error', () => {
           this.#send({ type: 'abort', rid: frame.rid, reason: 'upstream read failed' })
@@ -754,38 +509,6 @@ export class TunnelClient {
       this.#send({ type: 'ws.close', sid: frame.sid, code: 1008, reason: 'path not allowed' })
       return
     }
-    // A browser cannot set headers on a WebSocket handshake, so the stream's
-    // ephemeral public key rides the query string — which carries nothing
-    // secret and which the relay already forwards verbatim. The path used for
-    // authentication excludes it, so both ends agree without the relay's help.
-    const [streamPath = frame.path, query = ''] = frame.path.split('?')
-    const browserKey = new URLSearchParams(query).get(E2E_KEY_PARAM)
-    if (browserKey !== null && browserKey !== '') {
-      try {
-        this.#contexts.set(frame.sid, {
-          key: deriveSessionKey(
-            this.#ephemeral.privateKey,
-            browserKey,
-            this.#credentials.encryptionToken,
-          ),
-          aad: streamPath,
-        })
-      } catch {
-        this.#send({ type: 'ws.close', sid: frame.sid, code: 1008, reason: 'bad key exchange' })
-        return
-      }
-    } else if (this.#credentials.requireE2e) {
-      // Refusing loudly matters: a relay that stripped the envelope would
-      // otherwise get a readable event stream, which is the whole exposure.
-      this.#send({
-        type: 'ws.close',
-        sid: frame.sid,
-        code: CLOSE_E2E_REQUIRED,
-        reason: 'this host requires end-to-end encryption',
-      })
-      return
-    }
-
     const authority = `${this.#config.localHost}:${String(this.#config.localPort)}`
     const headers = rewriteRequestHeaders(frame.headers)
     // `ws` sets its own handshake headers; leaving copies here would duplicate them.
@@ -812,18 +535,15 @@ export class TunnelClient {
     local.on('message', (raw, isBinary) => {
       const kind = isBinary ? 'binary' : 'text'
       const bytes = isBinary ? Buffer.from(raw as Buffer) : Buffer.from(raw.toString('utf8'), 'utf8')
-      // This is where the assistant's reply text leaves the machine, so it is
-      // sealed whenever the browser opened the stream encrypted.
-      const sealed = this.#sealFor(frame.sid, bytes)
-      this.#send(
-        sealed === null
-          ? { type: 'ws.message', sid: frame.sid, kind, data: bytes.toString(isBinary ? 'base64' : 'utf8') }
-          : { type: 'ws.message', sid: frame.sid, kind, data: '', sealed },
-      )
+      this.#send({
+        type: 'ws.message',
+        sid: frame.sid,
+        kind,
+        data: bytes.toString(isBinary ? 'base64' : 'utf8'),
+      })
     })
     local.on('close', (code, reason) => {
       this.#sockets.delete(frame.sid)
-      this.#contexts.delete(frame.sid)
       this.#send({
         type: 'ws.close',
         sid: frame.sid,
@@ -833,7 +553,6 @@ export class TunnelClient {
     })
     local.on('error', (error) => {
       this.#sockets.delete(frame.sid)
-      this.#contexts.delete(frame.sid)
       this.#send({ type: 'ws.close', sid: frame.sid, code: 1011, reason: error.message })
     })
   }

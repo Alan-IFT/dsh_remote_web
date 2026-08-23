@@ -115,10 +115,6 @@ export function apply(ctx: PluginContext, input: PluginConfigInput = {}): void {
             current.agentId,
             current.privateKey,
             current.encryptionToken,
-            // Encryption posture belongs in the signature: toggling it must
-            // rebuild the tunnel, or `requireE2e` would only take effect at the
-            // next restart while `status` already claimed the new value.
-            String(current.requireE2e),
           ].join('|')
 
     /**

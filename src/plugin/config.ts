@@ -49,9 +49,11 @@ export function statusPath(credentialPath: string): string {
  *
  * - `privateKey` answers "may this machine connect?" to the relay. It signs a
  *   challenge; the relay holds only the matching public key.
- * - `encryptionToken` answers "who may read this session?" and is shared only
- *   with browsers the operator authorizes. The relay never receives it, which
- *   is what makes the relay unable to read traffic it carries.
+ * - `encryptionToken` is this machine's half of a browser pairing code. The
+ *   relay never receives it, so the relay alone cannot mint a credential that
+ *   names this machine: a browser code is only complete once `invite` joins
+ *   the relay's auth token to this value. It binds a credential to a machine;
+ *   it does not hide traffic from the relay, which sees plaintext.
  */
 export interface AgentCredentials {
   version: 1
@@ -60,28 +62,12 @@ export interface AgentCredentials {
   agentId: string
   /** Ed25519 private key, base64url. Never sent; only signs challenges. */
   privateKey: string
-  /** Payload encryption token. Never sent to the relay in any form. */
+  /** Pairing token shared with browsers. Never sent to the relay in any form. */
   encryptionToken: string
   /** Label shown in the relay UI. */
   label: string
   /** Whether the tunnel should connect. `enable`/`disable` flip this. */
   enabled: boolean
-  /**
-   * Refuse to serve any request that did not arrive end-to-end encrypted.
-   *
-   * **Off by default, deliberately.** The cryptography and its wire format are
-   * complete and tested on both sides, but the browser transport is not: the
-   * relay does not yet carry a browser-sealed envelope on the HTTP plane, so
-   * nothing a real browser sends can satisfy this check. Defaulting it on
-   * would make a fresh install answer 403 to every request — a security
-   * setting that only breaks the product protects nobody.
-   *
-   * Turn it on once a client that seals is in use. Until then the session is
-   * protected by TLS to the relay, and the relay is trusted with plaintext —
-   * which the README and SECURITY.md state plainly rather than implying
-   * otherwise.
-   */
-  requireE2e: boolean
 }
 
 /** Validate parsed JSON as credentials. */
@@ -104,7 +90,6 @@ function parseCredentials(raw: unknown): AgentCredentials {
     encryptionToken: value.encryptionToken,
     label: typeof value.label === 'string' ? value.label : value.agentId,
     enabled: value.enabled !== false,
-    requireE2e: value.requireE2e === true,
   }
 }
 

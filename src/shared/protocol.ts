@@ -20,27 +20,6 @@
  * @module dsh-remote-web/shared/protocol
  */
 
-/**
- * Headers a browser uses to carry an end-to-end encrypted request.
- *
- * The envelope rides as headers rather than as a new frame kind so the relay
- * needs no knowledge of encryption at all: it already forwards headers
- * verbatim, so "the relay cannot read this" requires no relay code and no
- * second code path that could diverge from the plaintext one.
- */
-export const E2E_ID_HEADER = 'x-dshrw-rid'
-export const E2E_ENVELOPE_HEADER = 'x-dshrw-sealed'
-
-/**
- * Query parameter carrying a browser's ephemeral public key when it opens an
- * encrypted WebSocket.
- *
- * A browser cannot attach headers to a WebSocket handshake, so this is the one
- * channel available. It holds only a public key — useless without the
- * encryption token — so a URL is an acceptable place for it.
- */
-export const E2E_KEY_PARAM = 'dshrw_epk'
-
 /** Protocol version; a mismatch is refused at handshake time. */
 export const PROTOCOL_VERSION = 1
 
@@ -70,8 +49,10 @@ export const CLOSE_AGENT_OFFLINE = 4003
 export const CLOSE_UNSUPPORTED_VERSION = 4004
 export const CLOSE_RATE_LIMITED = 4005
 export const CLOSE_REVOKED = 4006
-/** The peer required end-to-end encryption the other side did not provide. */
-export const CLOSE_E2E_REQUIRED = 4007
+// 4007 is retired. It meant "the peer required end-to-end encryption", a
+// feature that was removed because the relay served the browser code that
+// performed it. Older builds still treat 4007 as a permanent refusal, so a new
+// code must not reuse the number.
 
 /** Path on the relay where an agent (DSH host plugin) dials in. */
 export const RELAY_AGENT_PATH = '/tunnel/v1/agent'
@@ -100,16 +81,6 @@ export interface AgentHelloFrame {
   label: string
   /** Version of the plugin, for diagnostics only. */
   agentVersion: string
-  /** Whether this agent requires end-to-end encrypted payloads. */
-  e2e: boolean
-  /**
-   * The host's ephemeral X25519 public key, base64url.
-   *
-   * Public by construction: deriving a session key from it also requires the
-   * encryption token, which the relay never holds. Passing it through the
-   * relay is therefore safe and saves a second round trip.
-   */
-  epk: string
 }
 
 /**
@@ -155,45 +126,12 @@ export interface HttpRequestFrame {
   clientId: string
 }
 
-/**
- * An end-to-end encrypted payload as it appears on the wire.
- *
- * Requests carry it in {@link E2E_ENVELOPE_HEADER}, which the relay already
- * forwards verbatim — so encryption needs no relay code and no second frame
- * kind. Responses carry it as a frame field, since the host builds those
- * frames itself and no header hop exists on the way back.
- *
- * Either way the relay treats it as opaque bytes: the envelope carries the
- * sender's ephemeral public key, and deriving the key also needs the
- * encryption token the relay never holds.
- */
-export interface SealedEnvelope {
-  /** base64url ephemeral X25519 public key of the sender. */
-  epk: string
-  /** Per-session salt, base64url. */
-  salt: string
-  /** base64url 12-byte nonce. */
-  n: string
-  /** base64url ciphertext. */
-  c: string
-  /** base64url 16-byte authentication tag. */
-  t: string
-}
-
-/**
- * One chunk of a request or response body.
- *
- * Exactly one carrier is populated: `data` for a plaintext session, `sealed`
- * for an end-to-end encrypted one. When `sealed` is present the relay moves
- * bytes it cannot read.
- */
+/** One chunk of a request or response body. */
 export interface BodyChunkFrame {
   type: 'body.chunk'
   rid: string
-  /** base64 of at most {@link MAX_BODY_CHUNK_BYTES} raw bytes; empty when sealed. */
+  /** base64 of at most {@link MAX_BODY_CHUNK_BYTES} raw bytes. */
   data: string
-  /** Encrypted chunk; present only for end-to-end encrypted exchanges. */
-  sealed?: SealedEnvelope
 }
 
 /** Terminates a request or response body stream. */
@@ -217,8 +155,6 @@ export interface HttpResponseFrame {
   rid: string
   status: number
   headers: Record<string, string>
-  /** Present when the host encrypted this response end to end. */
-  sealed?: SealedEnvelope
 }
 
 /* ──────────────────── WebSocket proxying (both directions) ───────────────── */
@@ -239,29 +175,13 @@ export interface WsOpenAckFrame {
   sid: string
 }
 
-/**
- * One WebSocket message in either direction.
- *
- * Exactly one carrier is populated: `data` for a plaintext session, `sealed`
- * for an end-to-end encrypted one. The relay moves either without inspecting
- * it, so encryption costs the relay no code.
- */
+/** One WebSocket message in either direction. */
 export interface WsMessageFrame {
   type: 'ws.message'
   sid: string
   /** `text` carries UTF-8 in `data`; `binary` carries base64 in `data`. */
   kind: 'text' | 'binary'
-  /** Empty when `sealed` is present. */
   data: string
-  /**
-   * Encrypted frame, authenticated against the stream path.
-   *
-   * Binding to the path — not to the relay-assigned `sid` — is what stops a
-   * relay from moving a frame between the two downlinks, which carry different
-   * message kinds. The path is known independently at both ends, so the relay
-   * cannot influence it.
-   */
-  sealed?: SealedEnvelope
 }
 
 /** Either side closing a proxied socket. */

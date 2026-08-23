@@ -59,7 +59,6 @@ import {
   type Session,
 } from './sessions.js'
 import { renderAgentPicker, renderErrorPage, renderLoginPage, type AgentChoice } from './pages.js'
-import { BROWSER_CRYPTO_CONTENT_TYPE, BROWSER_CRYPTO_SCRIPT } from './browser-crypto.js'
 
 /** Relay configuration. */
 export interface RelayOptions {
@@ -262,8 +261,6 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
 
         const tunnelId = randomUUID()
         tunnel = new Tunnel(record.agentId, tunnelId, record.label, socket)
-        tunnel.requiresE2e = hello.e2e === true
-        tunnel.hostPublicKey = typeof hello.epk === 'string' ? hello.epk : ''
         const displaced = tunnels.add(tunnel)
         if (displaced !== undefined) {
           try {
@@ -567,17 +564,6 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     const pathname = rawUrl.split('?')[0] ?? '/'
     const cookie = readSessionCookie(request.headers.cookie)
 
-    /* the browser encryption client; public, contains no secret */
-    if (pathname === '/__e2e/client.js') {
-      response.writeHead(200, {
-        ...securityHeaders(),
-        'content-type': BROWSER_CRYPTO_CONTENT_TYPE,
-        'cache-control': 'no-cache',
-      })
-      response.end(BROWSER_CRYPTO_SCRIPT)
-      return
-    }
-
     /* health check: unauthenticated on purpose, reveals nothing */
     if (pathname === '/__health') {
       sendJson(response, 200, { ok: true, agents: tunnels.list().length })
@@ -728,28 +714,6 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
       return
     }
 
-    /* the selected host's public key and encryption posture */
-    if (pathname.startsWith('/a/') && pathname.endsWith('/__e2e/host')) {
-      const agentId = decodeURIComponent(pathname.slice(3, pathname.length - '/__e2e/host'.length))
-      if (!scopeMayReach(session.agentId, agentId)) {
-        sendJson(response, 403, { ok: false, error: 'not authorized for this host' })
-        return
-      }
-      const live = tunnels.get(agentId)
-      if (live === undefined) {
-        sendJson(response, 503, { ok: false, error: 'host offline' })
-        return
-      }
-      // Both values are public: the key is useless without the encryption
-      // token, and the posture only tells the browser what the host demands.
-      sendJson(response, 200, {
-        ok: true,
-        publicKey: live.hostPublicKey,
-        requiresE2e: live.requiresE2e,
-      })
-      return
-    }
-
     /* agent picker */
     if (pathname === '/' || pathname === '/__agents') {
       const choices = agentChoices(session)
@@ -822,12 +786,7 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
           case 'ws.message': {
             const message = frame as WsMessageFrame
             if (socket.readyState !== socket.OPEN) return
-            // An encrypted frame is handed to the browser as the envelope
-            // itself. The relay does not read it and holds no key: forwarding
-            // is the whole of its participation in encryption.
-            if (message.sealed !== undefined) {
-              socket.send(JSON.stringify({ __dshrw: 1, ...message.sealed }))
-            } else if (message.kind === 'text') {
+            if (message.kind === 'text') {
               socket.send(message.data)
             } else {
               socket.send(Buffer.from(message.data, 'base64'))

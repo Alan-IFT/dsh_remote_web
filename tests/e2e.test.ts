@@ -223,8 +223,6 @@ beforeAll(async () => {
     encryptionToken: agent.encryptionToken,
     label: 'test-machine',
     enabled: true,
-    // Most cases here exercise the proxy itself; E2E has its own suite.
-    requireE2e: false,
   }
   tunnel = new TunnelClient(
     credentials,

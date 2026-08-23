@@ -101,24 +101,20 @@ export function renderLoginPage(options: { error?: string; next?: string } = {})
     </form>
     <p class="foot">连接受令牌保护，会话通过自建中转服务器转发。</p>
   </main>
-  <script src="/__e2e/client.js"></script>
   <script>
     /*
-     * Split the pasted pairing code before submitting: the auth half is what
-     * the relay checks, and the encryption half must stay in this tab. Posting
-     * the whole code would hand the relay the key it is designed never to have.
+     * Trim the pasted pairing code to its auth half before submitting.
+     *
+     * The relay only needs that half, and the encryption half is what binds a
+     * browser credential to one machine — a relay that learned it could mint a
+     * complete code on its own. Dropping it here keeps that out of the request
+     * entirely. The server tolerates a whole code as a fallback for a browser
+     * without scripting, so this is a narrowing, not a requirement.
      */
     document.getElementById('f').addEventListener('submit', function (event) {
       var field = document.getElementById('token')
       var parts = field.value.trim().split('.')
-      if (parts.length === 5 && parts[0] === 'dshrw1') {
-        try {
-          sessionStorage.setItem('dshrw-enc', parts[4])
-        } catch (error) {
-          /* Private mode: encryption simply stays off for this tab. */
-        }
-        field.value = parts[3]
-      }
+      if (parts.length === 5 && parts[0] === 'dshrw1') field.value = parts[3]
       void event
     })
   </script>

@@ -32,22 +32,6 @@ export class Tunnel {
   readonly label: string
   readonly socket: WebSocket
   readonly connectedAt = Date.now()
-  /**
-   * Whether this host refuses unencrypted requests.
-   *
-   * The relay records it to tell browsers what to do, not to enforce it: the
-   * host enforces its own policy, since a relay that could waive encryption
-   * would be a relay that could disable it.
-   */
-  requiresE2e = false
-  /**
-   * The host's ephemeral public key, relayed to browsers verbatim.
-   *
-   * The relay stores and forwards it but can do nothing with it: a session key
-   * needs the encryption token too.
-   */
-  hostPublicKey = ''
-
   /** Last time we saw any frame from the agent; drives liveness eviction. */
   lastSeenAt = Date.now()
 

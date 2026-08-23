@@ -177,10 +177,6 @@ function commandSetup(args: Args): void {
     encryptionToken,
     label,
     enabled: true,
-    // Opt-in until the browser transport carries sealed envelopes; see
-    // AgentCredentials.requireE2e for why defaulting this on would only break
-    // a fresh install.
-    requireE2e: args.booleans.has('require-e2e'),
   })
 
   say(`Paired with ${relayUrl}`)
@@ -303,7 +299,6 @@ function commandShowConfig(args: Args): void {
   say(`Agent id         ${credentials.agentId}`)
   say(`Label            ${credentials.label}`)
   say(`Enabled          ${String(credentials.enabled)}`)
-  say(`Require E2E      ${String(credentials.requireE2e)}`)
   say(`Signing key      ${fingerprint(hashToken(credentials.privateKey))} (fingerprint)`)
   say(`Encryption       ${fingerprint(hashToken(credentials.encryptionToken))} (fingerprint)`)
 }

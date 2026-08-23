@@ -23,9 +23,6 @@
  * @module dsh-remote-web/shared/headers
  */
 
-import { E2E_ENVELOPE_HEADER } from './protocol.js'
-import type { SealedEnvelope } from './protocol.js'
-
 /**
  * Headers never forwarded from the browser to the local DSH server.
  *
@@ -210,41 +207,6 @@ const ALLOWED_WS_PATHS = new Set(['/api/events.mux', '/api/events.host'])
 export function isAllowedWebSocketPath(path: string): boolean {
   const pathname = path.split('?')[0] ?? ''
   return ALLOWED_WS_PATHS.has(pathname)
-}
-
-/**
- * Read an end-to-end envelope from a browser's request headers.
- *
- * The header form exists so the relay can stay ignorant of encryption: it
- * forwards headers verbatim already, so no relay code — and no second relay
- * code path — is needed for ciphertext to cross it.
- *
- * @param headers - Normalized request headers.
- * @returns The envelope, or `undefined` when absent or malformed. A malformed
- *          envelope is treated as absent, so the host's `requireE2e` decides
- *          the outcome rather than this parser.
- */
-export function readEnvelopeHeader(
-  headers: Record<string, string>,
-): SealedEnvelope | undefined {
-  const raw = headers[E2E_ENVELOPE_HEADER]
-  if (raw === undefined) return undefined
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'))
-  } catch {
-    return undefined
-  }
-  const envelope = parsed as SealedEnvelope
-  if (
-    typeof envelope?.epk !== 'string' ||
-    typeof envelope.n !== 'string' ||
-    typeof envelope.c !== 'string' ||
-    typeof envelope.t !== 'string'
-  ) {
-    return undefined
-  }
-  return envelope
 }
 
 /**

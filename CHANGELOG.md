@@ -10,9 +10,8 @@ First working version.
   inbound port, no router configuration, and no public address.
 - **Two independent credentials.** An Ed25519 signing key answers *who may
   connect* (the relay stores only the public half); a separate encryption token
-  answers *who may read* (the relay never receives it).
-- **End-to-end encryption** on both the HTTP plane and the event stream, under
-  X25519 + HKDF + AES-256-GCM. The relay forwards ciphertext and holds no key.
+  binds a browser credential to one machine, so the relay cannot mint a working
+  credential by itself (it never receives that token).
 - **Signature login.** A browser presents its token once, enrolls a key, and
   authenticates by signature afterwards — so the token stops crossing the wire
   and a relay reached over plain HTTP leaks no reusable credential.
@@ -30,6 +29,11 @@ First working version.
   actions are **not** proxied. A remote browser should not hold a shell, and
   actions on the host's physical desktop are abuse-only when triggered
   remotely.
+- **The relay sees session plaintext.** It terminates TLS, so host it yourself.
+  An in-browser encryption mode was removed rather than shipped: the relay
+  served the very code meant to defend against it, so the guarantee could not
+  hold. See
+  [docs/DECISIONS.md](docs/DECISIONS.md#browser-side-end-to-end-encryption-was-removed).
 - Metadata (frame sizes, counts, timing) is visible to the relay. Hiding it
   needs padding and constant-rate cover traffic, whose cost exceeds the benefit.
 - The encryption token is long-lived and shared between a machine and the
